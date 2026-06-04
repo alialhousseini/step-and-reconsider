@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe *)",
+      "Skill(superpowers:brainstorming)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Skill(superpowers:writing-plans)",
+      "Bash(mkdir -p .claude/agents && ls -la .claude/agents/)",
+      "Bash(xxd)",
+      "Bash(git -C \"c:/Users/ali.alhousseini/OneDrive - SUPSI/Github/step-and-reconsider\" log --format=\"%H %s\" -1)",
+      "Bash(git -C \"c:/Users/ali.alhousseini/OneDrive - SUPSI/Github/step-and-reconsider\" show --stat 6a0649f)",
+      "Bash(git -C \"c:/Users/ali.alhousseini/OneDrive - SUPSI/Github/step-and-reconsider\" log --format=\"%B\" -1)",
+      "Bash(git -C \"c:/Users/ali.alhousseini/OneDrive - SUPSI/Github/step-and-reconsider\" log --oneline -5)",
+      "Bash(dir \".claude\\\\agents\\\\\")",
+      "Bash(git push *)",
+      "Bash(git fetch *)",
+      "Bash(git pull *)",
+      "Bash(git stash *)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\ali.alhousseini\\OneDrive - SUPSI\\Github\\step-and-reconsider\\.claude"
+    ]
+  }
+}
