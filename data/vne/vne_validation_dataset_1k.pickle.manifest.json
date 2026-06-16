@@ -1,0 +1,29 @@
+{
+  "out": "data/vne/vne_validation_dataset_1k.pickle",
+  "num_shards": 10,
+  "num_instances": 1000,
+  "duplicates_detected": 0,
+  "total_replay_decisions": 9987,
+  "substrate_nodes": {
+    "min": 20,
+    "max": 40,
+    "mean": 29.857
+  },
+  "requests_per_instance": {
+    "min": 2,
+    "max": 6,
+    "mean": 4.006
+  },
+  "shards": [
+    "val_shard00000_seed2000000.pickle",
+    "val_shard00001_seed2000001.pickle",
+    "val_shard00002_seed2000002.pickle",
+    "val_shard00003_seed2000003.pickle",
+    "val_shard00004_seed2000004.pickle",
+    "val_shard00005_seed2000005.pickle",
+    "val_shard00006_seed2000006.pickle",
+    "val_shard00007_seed2000007.pickle",
+    "val_shard00008_seed2000008.pickle",
+    "val_shard00009_seed2000009.pickle"
+  ]
+}
