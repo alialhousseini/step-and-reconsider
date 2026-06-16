@@ -23,8 +23,9 @@ from vne.config import VNEConfig
 from vne.dataset import RandomVNEDataset
 from vne.instance_generator import make_dataset
 from vne.network import VNEPolicyNetwork
+from vne.bq_network import BQPolicyNetwork
 from vne.trajectory import Trajectory as VNETrajectory
-from vne.validation_set_generator import make_validation_dataset, run_self_check, save_dataset
+from vne.validation_set_generator import make_validation_dataset, run_self_check, save_dataset, solver_kwargs_from_config
 
 
 def collate_vne_batch(batch):
@@ -34,7 +35,11 @@ def collate_vne_batch(batch):
     }
 
 
-def get_network(config: VNEConfig, device: torch.device) -> VNEPolicyNetwork:
+def get_network(config: VNEConfig, device: torch.device):
+    """Return the appropriate policy network for the configured architecture."""
+    arch = getattr(config, "architecture", "lehd")
+    if arch == "bq":
+        return BQPolicyNetwork(config, device)
     return VNEPolicyNetwork(config, device)
 
 
@@ -67,7 +72,7 @@ def ensure_solved_dataset(
         num_instances,
         config,
         with_solutions=True,
-        solver_kwargs={"time_limit_s": config.validation_solver_time_limit},
+        solver_kwargs=solver_kwargs_from_config(config),
         seed=seed,
     )
     run_self_check(dataset)
@@ -150,11 +155,34 @@ def evaluate(eval_type: str, config: VNEConfig, network: VNEPolicyNetwork, to_ev
 
     def process_search_results(destination_path: str, problem_instances, results, append_to_dataset):
         objectives = np.array([result["objective"] for result in results], dtype=float)
+        # Compute per-instance gap to ILP optimum and feasibility rate
+        ilp_objectives = []
+        gaps_pct = []
+        feasible_count = 0
+        for inst, res in zip(problem_instances, results):
+            ilp_obj = inst.get("objective")
+            if ilp_obj is not None:
+                ilp_objectives.append(ilp_obj)
+                model_obj = res["objective"]
+                if model_obj > float("-inf") and ilp_obj != 0:
+                    gap_pct = (ilp_obj - model_obj) / abs(ilp_obj) * 100.0
+                    gaps_pct.append(gap_pct)
+                    feasible_count += 1
+                elif model_obj > float("-inf"):
+                    feasible_count += 1
+                    gaps_pct.append(0.0)
+        n = len(results)
         return {
             "mean_obj": float(objectives.mean()),
+            "mean_ilp_obj": float(np.mean(ilp_objectives)) if ilp_objectives else 0.0,
+            "mean_gap_pct": float(np.mean(gaps_pct)) if gaps_pct else float("nan"),
+            "feasibility_pct": feasible_count / n * 100.0 if n else 0.0,
         }
 
     if not config.gumbeldore_eval:
+        # Load instances once to know count and avoid redundant I/O per beam width
+        instances_raw, _, _ = load_instances(config)
+        total_inst = len(instances_raw)
         loggable = {}
         metric = None
         for beam_width, batch_size in config.beams_with_batch_sizes.items():
@@ -164,6 +192,7 @@ def evaluate(eval_type: str, config: VNEConfig, network: VNEPolicyNetwork, to_ev
             _config.gumbeldore_config["devices_for_workers"] = _config.devices_for_eval_workers
             _config.gumbeldore_config["batch_size_per_worker"] = batch_size
             _config.gumbeldore_config["batch_size_per_cpu_worker"] = batch_size
+            t0 = time.time()
             results = GumbeldoreDataset(
                 config=_config,
                 trajectory_cls=VNETrajectory,
@@ -172,7 +201,11 @@ def evaluate(eval_type: str, config: VNEConfig, network: VNEPolicyNetwork, to_ev
                 beam_leaves_to_result_fn=beam_leaves_to_result,
                 process_search_results_fn=process_search_results,
             ).generate_dataset(copy.deepcopy(network.get_weights()), False)
+            t_eval = time.time() - t0
             loggable[f"{eval_type} beam width {beam_width}. Obj."] = float(results["mean_obj"])
+            loggable[f"{eval_type} beam-{beam_width} gap%"] = float(results["mean_gap_pct"])
+            loggable[f"{eval_type} beam-{beam_width} feas%"] = float(results["feasibility_pct"])
+            loggable[f"{eval_type} beam-{beam_width} time/inst_ms"] = (t_eval / max(total_inst, 1)) * 1000.0
             if beam_width == config.validation_relevant_beam_width:
                 metric = -results["mean_obj"]
         return metric, loggable
@@ -253,6 +286,7 @@ def train_with_dataloader(config: VNEConfig, dataloader: DataLoader, network: VN
     progress_bar = tqdm(range(len(dataloader)))
     data_iter = iter(dataloader)
     loss_fn = CrossEntropyLoss(reduction="mean")
+    t0 = time.time()
 
     for _ in progress_bar:
         data = next(data_iter)
@@ -275,22 +309,89 @@ def train_with_dataloader(config: VNEConfig, dataloader: DataLoader, network: VN
         accumulated_loss += loss.item()
         progress_bar.set_postfix({"batch_loss": loss.item()})
 
-    return accumulated_loss / len(dataloader)
+    t_train = time.time() - t0
+    return accumulated_loss / len(dataloader), t_train
 
 
 def train_for_one_epoch_gumbeldore(config: VNEConfig, network: VNEPolicyNetwork, network_weights: dict, optimizer: torch.optim.Optimizer, append_to_dataset: bool) -> Tuple[float, dict]:
+    t0 = time.time()
     dataloader, mean_generated_obj = get_gumbeldore_dataloader(config, network_weights, append_to_dataset)
-    avg_loss = train_with_dataloader(config, dataloader, network, optimizer)
-    return avg_loss, {"Avg generated obj": float(mean_generated_obj)}
+    t_gen = time.time() - t0
+    avg_loss, t_train = train_with_dataloader(config, dataloader, network, optimizer)
+    return avg_loss, {"Avg generated obj": float(mean_generated_obj), "t_gen_s": t_gen, "t_train_s": t_train}
 
 
 def train_for_one_epoch_supervised(config: VNEConfig, network: VNEPolicyNetwork, optimizer: torch.optim.Optimizer, dataloader: DataLoader):
-    return train_with_dataloader(config, dataloader, network, optimizer)
+    avg_loss, _t_train = train_with_dataloader(config, dataloader, network, optimizer)
+    return avg_loss
+
+
+def _apply_env_overrides(config: VNEConfig) -> None:
+    """Lightweight experiment overrides via env vars (for A/B runs without
+    editing config.py), plus a polite GPU memory cap so we share the MPS GPU."""
+    env = os.environ
+    if env.get("VNE_TRAINING_SET_PATH"):
+        config.training_set_path = env["VNE_TRAINING_SET_PATH"]
+    if env.get("VNE_VALIDATION_SET_PATH"):
+        config.validation_set_path = env["VNE_VALIDATION_SET_PATH"]
+    if env.get("VNE_TEST_SET_PATH"):
+        config.test_set_path = env["VNE_TEST_SET_PATH"]
+    if env.get("VNE_CUSTOM_NUM_INSTANCES"):
+        config.custom_num_instances = int(env["VNE_CUSTOM_NUM_INSTANCES"])
+    if env.get("VNE_NUM_EPOCHS"):
+        config.num_epochs = int(env["VNE_NUM_EPOCHS"])
+    if env.get("VNE_RESULTS_PATH"):
+        config.results_path = env["VNE_RESULTS_PATH"]
+    if env.get("VNE_EMBEDDING_DIM"):
+        config.embedding_dim = int(env["VNE_EMBEDDING_DIM"])
+        config.latent_dimension = config.embedding_dim
+    if env.get("VNE_HIDDEN_DIM"):
+        config.hidden_dim = int(env["VNE_HIDDEN_DIM"])
+    if env.get("VNE_NUM_HEADS"):
+        config.num_attention_heads = int(env["VNE_NUM_HEADS"])
+    if env.get("VNE_NUM_DECODER_LAYERS"):
+        config.num_decoder_layers = int(env["VNE_NUM_DECODER_LAYERS"])
+    if env.get("VNE_NUM_ENCODER_LAYERS"):
+        config.num_encoder_layers = int(env["VNE_NUM_ENCODER_LAYERS"])
+    if env.get("VNE_NUM_TRANSFORMER_BLOCKS"):
+        config.num_transformer_blocks = int(env["VNE_NUM_TRANSFORMER_BLOCKS"])
+    if env.get("VNE_FF_DIM"):
+        config.feedforward_dimension = int(env["VNE_FF_DIM"])
+    if env.get("VNE_LR"):
+        config.optimizer["lr"] = float(env["VNE_LR"])
+    if env.get("VNE_LEARNING_TYPE"):
+        config.learning_type = env["VNE_LEARNING_TYPE"]
+    if env.get("VNE_ARCHITECTURE"):
+        config.architecture = env["VNE_ARCHITECTURE"]
+    if env.get("VNE_BEAM_WIDTH"):
+        config.gumbeldore_config["beam_width"] = int(env["VNE_BEAM_WIDTH"])
+    if env.get("VNE_REPLAN_STEPS"):
+        config.gumbeldore_config["replan_steps"] = int(env["VNE_REPLAN_STEPS"])
+    if env.get("VNE_NUM_GENERATE"):
+        config.gumbeldore_config["num_instances_to_generate"] = int(env["VNE_NUM_GENERATE"])
+    if env.get("VNE_NUM_CPU_WORKERS"):
+        config.gumbeldore_config["devices_for_workers"] = ["cpu"] * int(env["VNE_NUM_CPU_WORKERS"])
+    if env.get("VNE_CPU_BATCH_SIZE"):
+        config.gumbeldore_config["batch_size_per_cpu_worker"] = int(env["VNE_CPU_BATCH_SIZE"])
+    if env.get("VNE_BATCH_SIZE"):
+        config.batch_size_training = int(env["VNE_BATCH_SIZE"])
+    if env.get("VNE_EVAL_WORKERS"):
+        config.devices_for_eval_workers = ["cuda:0"] * int(env["VNE_EVAL_WORKERS"])
+    if env.get("VNE_GEN_DEVICE"):
+        # Comma-separated list of devices for Gumbeldore generation, e.g. "cuda:0" or "cuda:0,cuda:0,cuda:0"
+        config.gumbeldore_config["devices_for_workers"] = env["VNE_GEN_DEVICE"].split(",")
+        config.gumbeldore_config["batch_size_per_worker"] = int(env.get("VNE_GEN_BATCH_SIZE", "32"))
+        config.gumbeldore_config["batch_size_per_cpu_worker"] = int(env.get("VNE_GEN_BATCH_SIZE", "32"))
+    frac = env.get("VNE_GPU_MEM_FRACTION")
+    if frac and str(config.training_device).startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(float(frac), 0)
+        print(f"Capped GPU memory fraction to {frac} (shared MPS GPU).")
 
 
 if __name__ == "__main__":
     print(">> VNE <<")
     config = VNEConfig()
+    _apply_env_overrides(config)
     ensure_required_datasets(config)
     main_train_cycle(
         learning_type=config.learning_type,

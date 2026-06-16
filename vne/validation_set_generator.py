@@ -34,6 +34,90 @@ from vne.config import VNEConfig
 EdgeInt = Tuple[int, int]
 
 
+# Preference order used by the "auto" choice: fast/free backends first, then any
+# licensed commercial backend, then the always-available CBC fallback. Reordered
+# so generation runs anywhere (no license) yet uses a faster solver when present.
+_AUTO_ORDER = ["highs", "gurobi", "cplex", "cbc"]
+
+
+def _concrete_solver(name: str, time_limit_s: int, threads: int, mip_gap: float):
+    """Construct a PuLP solver backend by name, or return None if unavailable.
+
+    `name` in {"highs", "gurobi", "cplex", "cbc"}.
+      - highs : open-source (highspy); no license, runs on every node.
+      - gurobi: gurobipy bindings; needs a license covering the model size.
+      - cplex : IBM CPLEX via `cplex` binary on PATH (full/academic install).
+      - cbc   : bundled fallback, always available.
+    `threads=0` and `mip_gap=0.0` let the backend use its defaults / prove
+    optimality. A small `mip_gap` (e.g. 0.01) trades a tiny optimality margin
+    for large speedups on symmetric instances.
+    """
+    # Build kwargs dict without None values — PuLP passes them directly to
+    # the solver's setParam, and Gurobi rejects None for typed parameters.
+    kwargs: dict = {"msg": False, "timeLimit": time_limit_s}
+    if threads and threads > 0:
+        kwargs["threads"] = threads
+    if mip_gap and mip_gap > 0:
+        kwargs["gapRel"] = mip_gap
+
+    if name == "highs":
+        try:
+            solver = pulp.HiGHS(**kwargs)
+        except Exception:
+            return None
+        return solver if solver.available() else None
+    if name == "gurobi":
+        try:
+            kwargs["msg"] = 0  # Gurobi uses int, not bool
+            solver = pulp.GUROBI(**kwargs)
+        except Exception:
+            return None
+        return solver if solver.available() else None
+    if name == "cplex":
+        try:
+            solver = pulp.CPLEX_CMD(**kwargs)
+        except Exception:
+            return None
+        return solver if solver.available() else None
+    if name == "cbc":
+        return pulp.PULP_CBC_CMD(**kwargs)
+    raise ValueError(f"Unknown solver backend: {name}")
+
+
+def _solve_with_fallback(prob, *, solver: str, time_limit_s: int, threads: int, mip_gap: float = 0.0):
+    """Solve `prob`, honoring `solver` in {"auto", "highs", "gurobi", "cplex", "cbc"}.
+
+    "auto" tries fast/free backends first (HiGHS), then any licensed commercial
+    backend, then CBC. A backend that is unavailable, unlicensed, or rejects the
+    model (e.g. size-limited license) is skipped. Every backend returns the exact
+    ILP optimum when it reaches "Optimal" (or within `mip_gap` if set), so the
+    fallback does not degrade label quality.
+    """
+    order = {
+        "auto": _AUTO_ORDER,
+        "highs": ["highs"],
+        "gurobi": ["gurobi"],
+        "cplex": ["cplex"],
+        "cbc": ["cbc"],
+    }.get(solver)
+    if order is None:
+        raise ValueError(f"Unknown solver choice: {solver!r} (use auto|highs|gurobi|cplex|cbc)")
+
+    last_error: Exception | None = None
+    for name in order:
+        backend = _concrete_solver(name, time_limit_s, threads, mip_gap)
+        if backend is None:
+            continue
+        try:
+            return prob.solve(backend)
+        except Exception as exc:  # e.g. GurobiError: model too large for license
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No usable MILP solver available (tried: %s)" % ", ".join(order))
+
+
 def _requests(instance: Dict) -> List[Dict]:
     if "requests" in instance:
         return instance["requests"]
@@ -128,6 +212,11 @@ def generate_request(
     return requests
 
 
+def _request_total_demand(source_dem: int, dest_dem: int, pl_dems: List[int]) -> int:
+    """Total link demand of a request: source + destination + all processing demands."""
+    return source_dem + dest_dem + sum(pl_dems)
+
+
 def _build_and_solve_ilp(
     instance: Dict,
     *,
@@ -135,12 +224,34 @@ def _build_and_solve_ilp(
     cost_comm_per_unit: float,
     cost_comp_per_unit: float,
     time_limit_s: int,
-) -> Tuple[Optional[List[List[int]]], Optional[List[List[List[int]]]], Optional[float]]:
-    """Build the MILP from PROBLEM_FORMULATION.md and solve with CBC.
+    solver: str = "auto",
+    threads: int = 0,
+    mip_gap: float = 0.0,
+    enable_admission: bool = True,
+    revenue_per_demand_unit: float = 1.0,
+    objective_mode: str = "lex",
+) -> Tuple[
+    Optional[List[List[int]]],
+    Optional[List[List[List[int]]]],
+    Optional[float],
+    Optional[List[bool]],
+]:
+    """Build the MILP from PROBLEM_FORMULATION.md and solve it.
 
-    Returns nested (f_placements, processing_paths, objective) on success, or
-    (None, None, None) if infeasible or the solver did not reach optimality.
-    The outer solution dimension is request index.
+    Returns nested (f_placements, processing_paths, objective, accepted) on
+    success, or (None, None, None, None) if infeasible or the solver did not
+    reach optimality. The outer solution dimension is request index.
+
+    Admission control (``enable_admission=True``, the default and the model in
+    vne_README.md:357): a per-request binary ``accept[r]`` gates placement, so
+    the solver may reject a request whose embedding is unprofitable or
+    impossible. The objective becomes ``sum_r revenue_r * accept[r] - costs``,
+    with ``revenue_r = revenue + revenue_per_demand_unit * total_demand(r)``,
+    so revenue scales with the resources a request asks for (the standard
+    Yu-et-al. revenue model). A rejected request reserves nothing and gets an
+    empty placement/path list. With ``enable_admission=False`` every request is
+    forced (``sum_c f == 1``) and an unplaceable request makes the instance
+    infeasible (the legacy behaviour).
 
     Comp reservations apply only at F_0 (source link) and F_{k-1} (destination
     link). Intermediate processing nodes F_1..F_{k-2} are placed at comm nodes
@@ -192,12 +303,25 @@ def _build_and_solve_ilp(
                     else None
                 )
 
+    # accept[r] = 1 iff request r is embedded. Without admission it is the
+    # constant 1, reducing the placement rule to the legacy "place everything".
+    accept: Dict[int, object] = {}
+    for r in range(num_requests):
+        accept[r] = (
+            pulp.LpVariable(f"accept_{r}", cat="Binary") if enable_admission else 1
+        )
+
+    # Place every node of an accepted request exactly once: sum_c f == accept[r].
     for r in range(num_requests):
         for i in range(ks[r]):
             terms = [f[r, i, c] for c in range(num_comm) if f[r, i, c] is not None]
             if not terms:
-                return None, None, None
-            prob += pulp.lpSum(terms) == 1, f"place_{r}_{i}"
+                if enable_admission:
+                    # No legal host for this node -> the request cannot be accepted.
+                    prob += accept[r] == 0, f"reject_{r}_{i}"
+                    continue
+                return None, None, None, None
+            prob += pulp.lpSum(terms) == accept[r], f"place_{r}_{i}"
 
     # Comp-capacity at attached comm nodes: source_dem at F_0, dest_dem at F_{k-1}.
     # (Both directions of the comp link share one physical resource per PROBLEM_FORMULATION.)
@@ -255,22 +379,80 @@ def _build_and_solve_ilp(
         for ell in range(ks[r] - 1)
         for e in edges
     )
-    # Comp cost is constant per instance (source_dem + dest_dem always reserved
-    # exactly once). Encoded explicitly for symmetry with the formulation doc.
-    cost_comp_term = cost_comp_per_unit * sum(
-        source_dems[r] + dest_dems[r]
+    # Comp cost: source_dem + dest_dem reserved exactly once per accepted request.
+    cost_comp_term = pulp.lpSum(
+        cost_comp_per_unit * (source_dems[r] + dest_dems[r]) * accept[r]
         for r in range(num_requests)
     )
-    prob += revenue * num_requests - cost_comm_term - cost_comp_term
+    cost_term = cost_comm_term + cost_comp_term
+    accept_term = pulp.lpSum(accept[r] for r in range(num_requests))
 
-    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=time_limit_s)
-    status = prob.solve(solver)
-    if pulp.LpStatus[status] != "Optimal":
-        return None, None, None
+    if objective_mode == "lex":
+        # Lexicographic "maximize acceptance, then minimize cost" as a SINGLE
+        # MILP via a big-M acceptance weight W chosen just above the maximum
+        # achievable routing cost, so accepting one more request always beats any
+        # cost saving (exact lexicographic order). A per-instance tight W (vs a
+        # fixed huge constant) keeps the LP relaxation tight and the solve fast,
+        # and the cost term inside the same objective guides the search far better
+        # than a separate two-stage acceptance solve.
+        #   acceptance stays exact under mip_gap as long as 1/max_accept > mip_gap
+        #   (one fewer acceptance costs ~W, i.e. > mip_gap of the objective);
+        #   the gap is absorbed by the (secondary) routing cost, which is fine for
+        #   training labels.
+        max_cost_bound = sum(
+            pl_dems[r][ell] * (num_comm - 1) * cost_comm_per_unit
+            for r in range(num_requests)
+            for ell in range(ks[r] - 1)
+        ) + sum(
+            (source_dems[r] + dest_dems[r]) * cost_comp_per_unit
+            for r in range(num_requests)
+        )
+        big_w = float(max_cost_bound) + 1.0
+        prob.sense = pulp.LpMaximize
+        prob.setObjective(big_w * accept_term - cost_term)
+    elif objective_mode == "profit":
+        # Single revenue-minus-cost objective: the solver drops unprofitable
+        # requests (revenue scales with demand).
+        revenue_term = pulp.lpSum(
+            (
+                revenue
+                + revenue_per_demand_unit
+                * _request_total_demand(source_dems[r], dest_dems[r], pl_dems[r])
+            )
+            * accept[r]
+            for r in range(num_requests)
+        )
+        prob.sense = pulp.LpMaximize
+        prob.setObjective(revenue_term - cost_term)
+    else:
+        raise ValueError(f"Unknown objective_mode: {objective_mode!r} (use 'lex' or 'profit')")
+
+    status = _solve_with_fallback(prob, solver=solver, time_limit_s=time_limit_s, threads=threads, mip_gap=mip_gap)
+
+    # Accept a proven-optimal solution OR the best feasible incumbent found
+    # before a timeout. Keeping the incumbent means hard instances are never
+    # silently discarded and resampled, so there is no timeout-selection bias
+    # (the labels for those few are within the solver's gap of optimal).
+    feasible_sol_states = (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
+    if getattr(prob, "sol_status", None) not in feasible_sol_states:
+        # Fall back to the classic status for backends that don't set sol_status.
+        if pulp.LpStatus[status] != "Optimal":
+            return None, None, None, None
+
+    accepted: List[bool] = [
+        (not enable_admission) or (pulp.value(accept[r]) > 0.5)
+        for r in range(num_requests)
+    ]
 
     all_f_placements: List[List[int]] = []
     all_processing_paths: List[List[List[int]]] = []
     for r in range(num_requests):
+        if not accepted[r]:
+            # Rejected request: no placement, no path, no reservation.
+            all_f_placements.append([])
+            all_processing_paths.append([])
+            continue
+
         f_placements: List[int] = []
         for i in range(ks[r]):
             chosen_c = next(
@@ -292,7 +474,7 @@ def _build_and_solve_ilp(
             cursor = start
             while cursor != end:
                 if cursor not in outgoing:
-                    return None, None, None
+                    return None, None, None, None
                 nxt = outgoing[cursor][1]
                 path.append(nxt)
                 cursor = nxt
@@ -301,7 +483,16 @@ def _build_and_solve_ilp(
         all_f_placements.append(f_placements)
         all_processing_paths.append(processing_paths)
 
-    return all_f_placements, all_processing_paths, float(pulp.value(prob.objective))
+    if objective_mode == "profit":
+        # Maximize-style profit (revenue - cost).
+        objective_value = float(pulp.value(prob.objective))
+    else:
+        # "lex": store -cost so the convention stays "higher is better" (matches
+        # Trajectory.to_max_evaluation_fn, which also returns -cost). The big-M
+        # acceptance term is excluded from the stored scalar; acceptance is
+        # reported separately via `accepted`.
+        objective_value = -float(pulp.value(cost_term))
+    return all_f_placements, all_processing_paths, objective_value, accepted
 
 
 def solve_instance_ilp(
@@ -311,26 +502,42 @@ def solve_instance_ilp(
     revenue: Optional[float] = None,
     cost_comm_per_unit: float = 1.0,
     cost_comp_per_unit: float = 0.0,
+    solver: str = "auto",
+    threads: int = 0,
+    mip_gap: float = 0.0,
+    enable_admission: bool = True,
+    revenue_per_demand_unit: float = 1.0,
+    objective_mode: str = "lex",
 ) -> Dict:
     """Solve the embedding ILP and write the solution fields in place.
 
     Adds:
         - `f_placements`      : list[list[int]], one placement list per request
+                                (empty for a rejected request)
         - `processing_paths`  : list[list[list[int]]], one path-list per request
-        - `objective`         : ILP optimum (revenue - costs)
+                                (empty for a rejected request)
+        - `accepted`          : list[bool], whether each request was embedded
+        - `objective`         : ILP optimum (revenue of accepted - costs)
         - `chosen_path`       : tuple[int, int] alias, only for legacy one-request k=2
 
-    Defaults `revenue=0`, `cost_comp=0`, `cost_comm=1`: with these a
-    solution objective is negative total bandwidth-weighted hop cost.
+    With `enable_admission=True` (default) the solver chooses which requests to
+    embed to maximize revenue minus cost; `revenue` here is a flat per-request
+    term added on top of the demand-proportional `revenue_per_demand_unit`.
     """
     if revenue is None:
         revenue = 0.0
-    f_placements, processing_paths, objective = _build_and_solve_ilp(
+    f_placements, processing_paths, objective, accepted = _build_and_solve_ilp(
         instance,
         revenue=revenue,
         cost_comm_per_unit=cost_comm_per_unit,
         cost_comp_per_unit=cost_comp_per_unit,
         time_limit_s=time_limit_s,
+        solver=solver,
+        threads=threads,
+        mip_gap=mip_gap,
+        objective_mode=objective_mode,
+        enable_admission=enable_admission,
+        revenue_per_demand_unit=revenue_per_demand_unit,
     )
     if f_placements is None:
         raise RuntimeError("ILP did not find an optimal solution (infeasible or timed out)")
@@ -340,13 +547,42 @@ def solve_instance_ilp(
         [tuple(path) for path in request_paths]
         for request_paths in processing_paths
     ]
+    instance["accepted"] = list(accepted)
     instance["objective"] = objective
     instance.pop("chosen_path", None)
     requests = _requests(instance)
     # Single-link back-compat: a processing link's (start, end) pair.
-    if len(requests) == 1 and requests[0]["num_processing_nodes"] == 2:
+    if (
+        len(requests) == 1
+        and requests[0]["num_processing_nodes"] == 2
+        and accepted[0]
+    ):
         instance["chosen_path"] = (f_placements[0][0], f_placements[0][1])
     return instance
+
+
+def solver_kwargs_from_config(config: VNEConfig, **overrides) -> Dict:
+    """Build the `solve_instance_ilp` kwargs from a VNEConfig (single source of truth).
+
+    Threads the MILP backend choice and the admission/revenue/cost model from the
+    config so every generation entry point (vne_main preflight, the SLURM shard
+    script, the CLI) produces labels with identical semantics. `overrides` win,
+    e.g. to force a backend or time limit per SLURM task.
+    """
+    kwargs = {
+        "time_limit_s": config.validation_solver_time_limit,
+        "solver": getattr(config, "validation_solver", "highs"),
+        "threads": getattr(config, "validation_solver_threads", 0),
+        "mip_gap": getattr(config, "validation_solver_mip_gap", 0.0),
+        "objective_mode": getattr(config, "validation_objective", "lex"),
+        "enable_admission": getattr(config, "enable_admission", True),
+        "revenue": getattr(config, "validation_revenue_per_request", 0.0),
+        "revenue_per_demand_unit": getattr(config, "validation_revenue_per_demand_unit", 1.0),
+        "cost_comm_per_unit": getattr(config, "validation_cost_comm_per_unit", 1.0),
+        "cost_comp_per_unit": getattr(config, "validation_cost_comp_per_unit", 0.0),
+    }
+    kwargs.update({k: v for k, v in overrides.items() if v is not None})
+    return kwargs
 
 
 def generate_instance(
@@ -384,9 +620,14 @@ def generate_instance(
         if not with_solutions:
             return instance
         try:
-            return solve_instance_ilp(instance, **solver_kwargs)
+            solved = solve_instance_ilp(instance, **solver_kwargs)
         except RuntimeError:
             continue
+        # With admission the ILP is always feasible (it can reject everything);
+        # skip instances where nothing was embedded so labels are non-trivial.
+        if not any(solved.get("accepted", [True])):
+            continue
+        return solved
     raise RuntimeError(
         f"Could not generate a feasible instance after {max_resample} resamples; "
         "consider widening capacity/bandwidth ranges or lowering demands."
@@ -448,9 +689,24 @@ def _verify_solution(instance: Dict) -> None:
     if len(processing_paths_all) != len(requests):
         raise AssertionError("processing_paths request count does not match requests")
 
+    accepted = instance.get("accepted")
+    if accepted is None:
+        accepted = [True] * len(requests)
+    if len(accepted) != len(requests):
+        raise AssertionError("accepted length does not match requests")
+
     for request_idx, request in enumerate(requests):
         f_placements: List[int] = list(f_placements_all[request_idx])
         processing_paths: List[Tuple[int, ...]] = list(processing_paths_all[request_idx])
+
+        if not accepted[request_idx]:
+            # A rejected request reserves nothing and carries no placement/path.
+            if f_placements or processing_paths:
+                raise AssertionError(
+                    f"request {request_idx}: rejected but has a placement/path"
+                )
+            continue
+
         k = request["num_processing_nodes"]
         pl_dems = list(request["processing_link_demands"])
 
@@ -522,6 +778,22 @@ def main() -> None:
     p.add_argument("--with-solutions", dest="with_solutions", action="store_true")
     p.add_argument("--no-solutions", dest="with_solutions", action="store_false")
     p.add_argument("--solver-time-limit", type=int, default=config.validation_solver_time_limit)
+    p.add_argument("--solver", choices=["auto", "highs", "gurobi", "cplex", "cbc"], default=getattr(config, "validation_solver", "highs"))
+    p.add_argument("--threads", type=int, default=getattr(config, "validation_solver_threads", 0))
+    p.add_argument("--mip-gap", type=float, default=getattr(config, "validation_solver_mip_gap", 0.0))
+    p.add_argument("--objective", choices=["lex", "profit"], default=getattr(config, "validation_objective", "lex"))
+    p.set_defaults(enable_admission=getattr(config, "enable_admission", True))
+    p.add_argument("--admission", dest="enable_admission", action="store_true",
+                   help="let the ILP reject unprofitable/unplaceable requests")
+    p.add_argument("--no-admission", dest="enable_admission", action="store_false",
+                   help="force every request to be embedded (legacy behaviour)")
+    p.add_argument("--revenue", type=float, default=getattr(config, "validation_revenue_per_request", 0.0))
+    p.add_argument("--revenue-per-demand-unit", type=float,
+                   default=getattr(config, "validation_revenue_per_demand_unit", 1.0))
+    p.add_argument("--cost-comm-per-unit", type=float,
+                   default=getattr(config, "validation_cost_comm_per_unit", 1.0))
+    p.add_argument("--cost-comp-per-unit", type=float,
+                   default=getattr(config, "validation_cost_comp_per_unit", 0.0))
     p.add_argument("--self-check", action="store_true")
     p.add_argument("--out", type=str, default=config.validation_output_path)
     args = p.parse_args()
@@ -539,7 +811,18 @@ def main() -> None:
         args.num_instances,
         config,
         with_solutions=args.with_solutions,
-        solver_kwargs={"time_limit_s": args.solver_time_limit},
+        solver_kwargs={
+            "time_limit_s": args.solver_time_limit,
+            "solver": args.solver,
+            "threads": args.threads,
+            "mip_gap": args.mip_gap,
+            "objective_mode": args.objective,
+            "enable_admission": args.enable_admission,
+            "revenue": args.revenue,
+            "revenue_per_demand_unit": args.revenue_per_demand_unit,
+            "cost_comm_per_unit": args.cost_comm_per_unit,
+            "cost_comp_per_unit": args.cost_comp_per_unit,
+        },
         seed=args.seed,
     )
     save_dataset(out, dataset)

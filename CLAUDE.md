@@ -2,11 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **⚡ ACTIVE VNE WORK — read [`docs/HANDOFF.md`](docs/HANDOFF.md) first.** It has the
+> current state, environment/cluster how-to (uv venv, SLURM, MPS GPU sharing,
+> HiGHS solver), the generated 50k/1k/2k datasets, the vectorized network, the
+> A/B result (the "epoch-6 drop" is training *divergence*, not data scarcity),
+> and the next step (enable gradient clipping + re-run). Repo now lives at
+> `~/scratch/step-and-reconsider` (moved out of the shared `ISIN` folder).
+
 ## What this repo is
 
 Implementation of "Take a Step and Reconsider" (TaSaR), an ECAI-2024 sequence-decoding method for self-improved neural combinatorial optimization (paper: 10.3233/FAIA240707). It is a fork of [gumbeldore](https://github.com/grimmlab/gumbeldore); the substantive new code lives in `core/incremental_sbs.py::IncrementalSBS.perform_tasar`. Everything else is gumbeldore scaffolding that was inherited and is mostly unchanged.
 
-Supported problem classes: TSP, CVRP, JSSP, Gomoku. An in-progress VNE (Virtual Network Embedding) extension lives under `vne/` — currently only design docs (`PROBLEM_FORMULATION.md`, `MATHEMATICAL_FORMULATION.md`, `TASAR_CONNECTION.md`), no code yet.
+Supported problem classes: TSP, CVRP, JSSP, Gomoku, and **VNE (Virtual Network Embedding)** — the VNE extension under `vne/` is now **fully implemented** (config, instance generator, ILP label generator, trajectory, LEHD-style policy network with a batched forward, dataset/replay, and `vne_main.py`). See `docs/HANDOFF.md` and `vne/PROBLEM_FORMULATION.md`.
 
 ## Commands
 

@@ -36,8 +36,24 @@ def _attach_for(substrate: Dict) -> Dict[int, int]:
     return attach
 
 
+def _accepted_for(instance: Dict, requests: List[Dict]) -> List[bool]:
+    """Per-request admission flags; legacy pickles without it embed everything."""
+    accepted = instance.get("accepted")
+    if accepted is None:
+        return [True] * len(requests)
+    return list(accepted)
+
+
 def _has_nested_paths(paths: List) -> bool:
-    return bool(paths) and bool(paths[0]) and isinstance(paths[0][0], (list, tuple))
+    # Per-request nesting: processing_paths[request][link] = path. A rejected
+    # request contributes an empty list, so inspect the FIRST non-empty entry
+    # (paths[0] alone is wrong when request 0 was rejected).
+    if not paths:
+        return False
+    for request_paths in paths:
+        if request_paths:
+            return isinstance(request_paths[0], (list, tuple))
+    return False
 
 
 def _chosen_path(instance: Dict, config: VNEConfig, request_idx: int, link_idx: int) -> CandidatePath:
@@ -90,8 +106,12 @@ def candidate_paths_from_instance(
     residual_compute = dict(substrate["compute_capacity"])
     attach = _attach_for(substrate)
     _validate_instance_size(instance, config)
+    accepted = _accepted_for(instance, requests)
 
     for prefix_request_idx in range(request_idx + 1):
+        if not accepted[prefix_request_idx]:
+            # A rejected request reserves nothing, so it leaves residuals untouched.
+            continue
         prefix_chain_length = requests[prefix_request_idx]["num_processing_nodes"] - 1
         limit = link_idx if prefix_request_idx == request_idx else prefix_chain_length
         for prefix_link_idx in range(limit):
@@ -146,7 +166,11 @@ class RandomVNEDataset(Dataset):
         for instance_idx, instance in enumerate(self.instances):
             requests = _requests(instance)
             _validate_instance_size(instance, config)
+            accepted = _accepted_for(instance, requests)
             for request_idx, request in enumerate(requests):
+                # Rejected requests have no embedding to replay as a target.
+                if not accepted[request_idx]:
+                    continue
                 for link_idx in range(request["num_processing_nodes"] - 1):
                     self.decision_index.append((instance_idx, request_idx, link_idx))
         if not self.decision_index:

@@ -135,7 +135,17 @@ class GumbeldoreDataset:
                     break
 
         ray.get(future_tasks)
+        # Properly clean up Ray resources: kill the actor and cancel worker
+        # futures so Ray state doesn't accumulate across epochs (causes hangs
+        # on repeated generate_dataset calls, observed with VNE).
+        ray.kill(job_pool)
+        for task in future_tasks:
+            try:
+                ray.cancel(task)
+            except Exception:
+                pass
         del job_pool
+        del future_tasks
         del network_weights
         torch.cuda.empty_cache()
 
