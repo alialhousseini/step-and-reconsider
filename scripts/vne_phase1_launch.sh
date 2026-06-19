@@ -54,7 +54,7 @@ make_export() {
 # GPU 0 on gnode06 L40S. Shares with LEHD-128.
 echo ">>> BQ-128 (seed=100, GPU 0)"
 EXP=$(make_export "bq" "128" "8" "512" "phase1_bq128" "100" "0" ",VNE_BATCH_SIZE=16")
-JOB_BQ128=$(sbatch --parsable --partition=gpuISIN --gres=mps:30 --job-name=bq128 --export="${EXP}" scripts/vne_train.sbatch)
+JOB_BQ128=$(sbatch --parsable --partition=gpuISIN --exclude=gnode05 --gres=mps:30 --job-name=bq128 --export="${EXP}" scripts/vne_train.sbatch)
 JOB_IDS["BQ-128"]=$JOB_BQ128
 echo "  Job: $JOB_BQ128"
 
@@ -62,7 +62,7 @@ echo "  Job: $JOB_BQ128"
 # GPU 1 on gnode06 L40S. Shares with LEHD-192.
 echo ">>> BQ-192 (seed=200, GPU 1)"
 EXP=$(make_export "bq" "192" "12" "768" "phase1_bq192" "200" "1" ",VNE_BATCH_SIZE=16")
-JOB_BQ192=$(sbatch --parsable --partition=gpuISIN --gres=mps:30 --job-name=bq192 --export="${EXP}" scripts/vne_train.sbatch)
+JOB_BQ192=$(sbatch --parsable --partition=gpuISIN --exclude=gnode05 --gres=mps:30 --job-name=bq192 --export="${EXP}" scripts/vne_train.sbatch)
 JOB_IDS["BQ-192"]=$JOB_BQ192
 echo "  Job: $JOB_BQ192"
 
@@ -70,7 +70,7 @@ echo "  Job: $JOB_BQ192"
 # GPU 0 on gnode06 L40S. Shares with BQ-128.
 echo ">>> LEHD-128 (seed=300, GPU 0)"
 EXP=$(make_export "lehd" "128" "8" "512" "phase1_lehd128" "300" "0" ",VNE_NUM_ENCODER_LAYERS=6,VNE_NUM_DECODER_LAYERS=6,VNE_BATCH_SIZE=64")
-JOB_L128=$(sbatch --parsable --partition=gpuISIN --gres=mps:30 --job-name=lehd128 --export="${EXP}" scripts/vne_train.sbatch)
+JOB_L128=$(sbatch --parsable --partition=gpuISIN --exclude=gnode05 --gres=mps:30 --job-name=lehd128 --export="${EXP}" scripts/vne_train.sbatch)
 JOB_IDS["LEHD-128"]=$JOB_L128
 echo "  Job: $JOB_L128"
 
@@ -78,7 +78,7 @@ echo "  Job: $JOB_L128"
 # GPU 1 on gnode06 L40S. Shares with BQ-192.
 echo ">>> LEHD-192 (seed=400, GPU 1)"
 EXP=$(make_export "lehd" "192" "12" "768" "phase1_lehd192" "400" "1" ",VNE_NUM_ENCODER_LAYERS=6,VNE_NUM_DECODER_LAYERS=6,VNE_BATCH_SIZE=64")
-JOB_L192=$(sbatch --parsable --partition=gpuISIN --gres=mps:30 --job-name=lehd192 --export="${EXP}" scripts/vne_train.sbatch)
+JOB_L192=$(sbatch --parsable --partition=gpuISIN --exclude=gnode05 --gres=mps:30 --job-name=lehd192 --export="${EXP}" scripts/vne_train.sbatch)
 JOB_IDS["LEHD-192"]=$JOB_L192
 echo "  Job: $JOB_L192"
 
