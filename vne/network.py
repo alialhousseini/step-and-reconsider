@@ -300,7 +300,7 @@ class VNEPolicyNetwork(nn.Module):
     # Reference: dim=128 → budget=1200, dim=192 → budget=800, dim=256 → budget=600.
     @property
     def total_token_budget(self) -> int:
-        return max(300, 1200 * 128 // self.config.embedding_dim)
+        return max(200, 800 * 128 // self.config.embedding_dim)
 
     def forward(self, state_batch: List[Dict[str, torch.Tensor]]) -> List[torch.Tensor]:
         if not state_batch:

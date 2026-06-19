@@ -175,7 +175,7 @@ class BQPolicyNetwork(nn.Module):
 
     @property
     def total_token_budget(self) -> int:
-        return max(400, 1200 * 128 // self.config.embedding_dim)
+        return max(300, 800 * 128 // self.config.embedding_dim)
 
     def forward(self, state_batch: List[Dict[str, torch.Tensor]]) -> List[torch.Tensor]:
         if not state_batch:
