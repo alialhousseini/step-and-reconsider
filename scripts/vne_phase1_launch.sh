@@ -30,7 +30,7 @@ TEST_PATH="data/vne/vne_test_dataset_2k.pickle"
 echo "================================================================"
 echo " Phase 1: Supervised Architecture Baselines"
 echo " Train: $TRAIN_PATH (2.5k ILP-labeled, 60-80n)"
-echo " Epochs: $EPOCHS | GPU mem: ${GPU_MEM} | BQ batch=32, LEHD batch=128/64"
+echo " Epochs: $EPOCHS | GPU mem: ${GPU_MEM} | BQ batch=16, LEHD batch=64/32"
 echo "================================================================"
 echo ""
 
@@ -46,16 +46,16 @@ make_export() {
 }
 
 # ---- BQ-128 (9 blocks, dim=128, heads=8, ff=512, ~1.78M params) ----
-# Reduced batch_size=32: BQ's unified attention over all tokens is O(seq_len²)
+# BQ batch_size=16: unified attention over all tokens is O(seq_len²). Proven safe.
 echo ">>> BQ-128 (seed=100)"
-EXP=$(make_export "bq" "128" "8" "512" "phase1_bq128" "100" ",VNE_BATCH_SIZE=32")
+EXP=$(make_export "bq" "128" "8" "512" "phase1_bq128" "100" ",VNE_BATCH_SIZE=16")
 JOB_BQ128=$(sbatch --parsable --partition=gpuISIN --gres=mps:30 --job-name=bq128 --export="${EXP}" scripts/vne_train.sbatch)
 JOB_IDS["BQ-128"]=$JOB_BQ128
 echo "  Job: $JOB_BQ128"
 
 # ---- BQ-192 (9 blocks, dim=192, heads=12, ff=768, ~4.00M params) ----
 echo ">>> BQ-192 (seed=200)"
-EXP=$(make_export "bq" "192" "12" "768" "phase1_bq192" "200" ",VNE_BATCH_SIZE=32")
+EXP=$(make_export "bq" "192" "12" "768" "phase1_bq192" "200" ",VNE_BATCH_SIZE=16")
 JOB_BQ192=$(sbatch --parsable --partition=gpuISIN --gres=mps:30 --job-name=bq192 --export="${EXP}" scripts/vne_train.sbatch)
 JOB_IDS["BQ-192"]=$JOB_BQ192
 echo "  Job: $JOB_BQ192"
