@@ -171,27 +171,33 @@ class BQPolicyNetwork(nn.Module):
     # Sub-batching (same budget logic as VNEPolicyNetwork)
     # ------------------------------------------------------------------
 
-    # Cap on (sub_batch_size * max_candidates) per batched pass.
-    candidate_token_budget = 8000
+    # Sub-batching budget: cap on (sub_batch_size * total_seq_len) per forward pass.
+    # At 60-80n scale each instance has ~70+70+52+cand ≈ 192+cand tokens.
+    # With budget=2400 and 400 total tokens: ~6 inst/sub-batch → ~60 MB attn per layer.
+    total_token_budget = 2400
 
     def forward(self, state_batch: List[Dict[str, torch.Tensor]]) -> List[torch.Tensor]:
         if not state_batch:
             return []
         results: List[torch.Tensor] = [None] * len(state_batch)
-        order = sorted(
-            range(len(state_batch)),
-            key=lambda i: int(state_batch[i]["candidate_features"].shape[0]),
-        )
+        # Sort by total token count (not just candidates) to keep sub-batches tight
+        def _total_tokens(idx: int) -> int:
+            s = state_batch[idx]
+            return (
+                int(s["node_features"].shape[0])
+                + int(s["edge_features"].shape[0])
+                + int(s["virtual_features"].shape[0])
+                + int(s["candidate_features"].shape[0])
+            )
+        order = sorted(range(len(state_batch)), key=_total_tokens)
         i = 0
         while i < len(order):
             group: List[int] = []
             group_max = 0
             while i < len(order):
-                cand = max(
-                    1, int(state_batch[order[i]]["candidate_features"].shape[0])
-                )
-                new_max = max(group_max, cand)
-                if group and (len(group) + 1) * new_max > self.candidate_token_budget:
+                tokens = max(1, _total_tokens(order[i]))
+                new_max = max(group_max, tokens)
+                if group and (len(group) + 1) * new_max > self.total_token_budget:
                     break
                 group.append(order[i])
                 group_max = new_max

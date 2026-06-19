@@ -76,17 +76,18 @@ def main_train_cycle(
     """
     is_supervised = learning_type == "supervised"
     print(f">> Learning type: {learning_type}")
-    # Avoid Ray co-location issues when multiple SLURM jobs share a node via MPS:
-    # - include_dashboard=False: prevents port 8265 conflict between Ray instances
-    # - ignore_reinit_error: safe if Ray was already started by another process
-    num_gpus = len(set([d for d in config.devices_for_eval_workers if d != "cpu"]))
-    ray.init(
-        num_gpus=num_gpus,
-        logging_level="info",
-        include_dashboard=False,
-        ignore_reinit_error=True,
-    )
-    print(ray.available_resources())
+    # Ray is only needed for Gumbeldore (parallel data generation). Skip it for
+    # supervised training to avoid GPU memory reservation (~13 GB on L40S) that
+    # competes with the model's own memory budget under MPS fraction caps.
+    if not is_supervised:
+        num_gpus = len(set([d for d in config.devices_for_eval_workers if d != "cpu"]))
+        ray.init(
+            num_gpus=num_gpus,
+            logging_level="info",
+            include_dashboard=False,
+            ignore_reinit_error=True,
+        )
+        print(ray.available_resources())
 
     logger = Logger(config.results_path, config.log_to_file, config.log_to_mlflow, config.mlflow_server_uri)
     logger.log_hyperparams(config)
@@ -226,6 +227,7 @@ def main_train_cycle(
         print(test_loggable_dict)
         logger.log_metrics(test_loggable_dict, step=0, step_desc="test")
 
-    print("Finished. Shutting down ray.")
-    ray.shutdown()
+    if not is_supervised:
+        print("Finished. Shutting down ray.")
+        ray.shutdown()
 

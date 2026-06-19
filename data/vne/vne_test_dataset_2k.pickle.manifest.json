@@ -1,39 +1,23 @@
 {
-  "out": "data/vne/vne_test_dataset_2k.pickle",
-  "num_shards": 20,
-  "num_instances": 2000,
-  "duplicates_detected": 0,
-  "total_replay_decisions": 20121,
+  "out": "vne_test_dataset_2k.pickle",
+  "split": "test",
+  "num_instances": 1000,
+  "total_replay_decisions": 36645,
   "substrate_nodes": {
-    "min": 20,
-    "max": 40,
-    "mean": 29.9635
+    "min": 60,
+    "max": 80,
+    "mean": 69.698
   },
   "requests_per_instance": {
-    "min": 2,
-    "max": 6,
-    "mean": 3.9975
+    "min": 10,
+    "max": 20,
+    "mean": 14.734
   },
-  "shards": [
-    "test_shard00000_seed3000000.pickle",
-    "test_shard00001_seed3000001.pickle",
-    "test_shard00002_seed3000002.pickle",
-    "test_shard00003_seed3000003.pickle",
-    "test_shard00004_seed3000004.pickle",
-    "test_shard00005_seed3000005.pickle",
-    "test_shard00006_seed3000006.pickle",
-    "test_shard00007_seed3000007.pickle",
-    "test_shard00008_seed3000008.pickle",
-    "test_shard00009_seed3000009.pickle",
-    "test_shard00010_seed3000010.pickle",
-    "test_shard00011_seed3000011.pickle",
-    "test_shard00012_seed3000012.pickle",
-    "test_shard00013_seed3000013.pickle",
-    "test_shard00014_seed3000014.pickle",
-    "test_shard00015_seed3000015.pickle",
-    "test_shard00016_seed3000016.pickle",
-    "test_shard00017_seed3000017.pickle",
-    "test_shard00018_seed3000018.pickle",
-    "test_shard00019_seed3000019.pickle"
-  ]
+  "objective": {
+    "min": -154.0,
+    "max": -35.0,
+    "mean": -91.563
+  },
+  "source": "split from 4k Gurobi checkpoint (60-80n, 10-20rq)",
+  "generated_at": "2026-06-19T14:45:50.646010"
 }

@@ -98,7 +98,7 @@ class VNEConfig:
 
         # Training.
         self.seed = 42
-        self.num_dataloader_workers = 1
+        self.num_dataloader_workers = 0  # 0 avoids CUDA IPC overhead under MPS sharing
         self.CUDA_VISIBLE_DEVICES = "0"   # MPS exposes the shared GPU as device 0
         self.training_device = "cuda"
         # 15 epochs is enough to pass the prior epoch-6 validation drop. The
