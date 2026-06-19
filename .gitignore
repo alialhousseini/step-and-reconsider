@@ -131,3 +131,6 @@ dmypy.json
 .DS_Store
 .idea
 results/
+*.pickle
+*.pickle.manifest.json
+data/vne/archive_*

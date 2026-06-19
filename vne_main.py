@@ -363,6 +363,8 @@ def _apply_env_overrides(config: VNEConfig) -> None:
         config.learning_type = env["VNE_LEARNING_TYPE"]
     if env.get("VNE_ARCHITECTURE"):
         config.architecture = env["VNE_ARCHITECTURE"]
+    if env.get("VNE_SEED"):
+        config.seed = int(env["VNE_SEED"])
     if env.get("VNE_BEAM_WIDTH"):
         config.gumbeldore_config["beam_width"] = int(env["VNE_BEAM_WIDTH"])
     if env.get("VNE_REPLAN_STEPS"):

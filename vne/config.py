@@ -75,7 +75,7 @@ class VNEConfig:
         self.validation_cost_comp_per_unit = 0.0
 
         # Supervised training-set generation.
-        self.supervised_training_num_instances = 10000
+        self.supervised_training_num_instances = 2500
         self.supervised_training_generation_seed = 0
 
         # Network (scaled to ~2M params, matching TSP LEHD capacity).
@@ -177,7 +177,7 @@ class VNEConfig:
         self.validation_relevant_beam_width = 1
 
 
-        self.training_set_path = "./data/vne/vne_supervised_training_dataset_10k.pickle"
+        self.training_set_path = "./data/vne/vne_supervised_training_dataset_4k.pickle"
         self.custom_num_instances = None
         # Bound the epoch length so epochs are comparable across pool sizes and
         # the per-example forward doesn't make a 50k epoch enormous: sample this
