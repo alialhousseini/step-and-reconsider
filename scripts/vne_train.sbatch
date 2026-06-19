@@ -17,6 +17,9 @@
 set -euo pipefail
 export PYTHONUNBUFFERED=1
 
+# Avoid fragmentation under memory-fraction caps — grow segments incrementally.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
 REPO="${VNE_REPO:-/mnt/beegfs/scratch/ali.alhousseini/step-and-reconsider}"
 cd "$REPO"; mkdir -p logs
 

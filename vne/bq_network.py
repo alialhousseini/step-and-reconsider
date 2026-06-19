@@ -173,8 +173,8 @@ class BQPolicyNetwork(nn.Module):
 
     # Sub-batching budget: cap on (sub_batch_size * total_seq_len) per forward pass.
     # At 60-80n scale each instance has ~70+70+52+cand ≈ 192+cand tokens.
-    # With budget=2400 and 400 total tokens: ~6 inst/sub-batch → ~60 MB attn per layer.
-    total_token_budget = 2400
+    # Budget=1200: worst-case 1200/(192+1)=6 inst, typical 1200/(192+50)=5 inst.
+    total_token_budget = 1200
 
     def forward(self, state_batch: List[Dict[str, torch.Tensor]]) -> List[torch.Tensor]:
         if not state_batch:
