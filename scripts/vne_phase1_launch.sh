@@ -33,7 +33,7 @@ TEST_PATH="data/vne/vne_test_dataset_2k.pickle"
 echo "================================================================"
 echo " Phase 1: Supervised Architecture Baselines"
 echo " Train: $TRAIN_PATH (2.5k ILP-labeled, 60-80n)"
-echo " Epochs: $EPOCHS | GPU mem: ${GPU_MEM} | BQ=16, LEHD=64/32"
+echo " Epochs: $EPOCHS | GPU mem: ${GPU_MEM} | all batch_size=16 (LEHD-256=32)"
 echo " GPUs:  gnode06 GPU0 (BQ-128+LEHD-128) GPU1 (BQ-192+LEHD-192)"
 echo "        gpu_HIGH GPU0 (LEHD-256 on A100)"
 echo "================================================================"
@@ -69,7 +69,7 @@ echo "  Job: $JOB_BQ192"
 # ---- LEHD-128 (6e+6d, dim=128, heads=8, ff=512, ~2.43M params) ----
 # GPU 0 on gnode06 L40S. Shares with BQ-128.
 echo ">>> LEHD-128 (seed=300, GPU 0)"
-EXP=$(make_export "lehd" "128" "8" "512" "phase1_lehd128" "300" "0" ",VNE_NUM_ENCODER_LAYERS=6,VNE_NUM_DECODER_LAYERS=6,VNE_BATCH_SIZE=64")
+EXP=$(make_export "lehd" "128" "8" "512" "phase1_lehd128" "300" "0" ",VNE_NUM_ENCODER_LAYERS=6,VNE_NUM_DECODER_LAYERS=6,VNE_BATCH_SIZE=16")
 JOB_L128=$(sbatch --parsable --partition=gpuISIN --exclude=gnode05 --gres=mps:30 --job-name=lehd128 --export="${EXP}" scripts/vne_train.sbatch)
 JOB_IDS["LEHD-128"]=$JOB_L128
 echo "  Job: $JOB_L128"
@@ -77,7 +77,7 @@ echo "  Job: $JOB_L128"
 # ---- LEHD-192 (6e+6d, dim=192, heads=12, ff=768, ~5.45M params) ----
 # GPU 1 on gnode06 L40S. Shares with BQ-192.
 echo ">>> LEHD-192 (seed=400, GPU 1)"
-EXP=$(make_export "lehd" "192" "12" "768" "phase1_lehd192" "400" "1" ",VNE_NUM_ENCODER_LAYERS=6,VNE_NUM_DECODER_LAYERS=6,VNE_BATCH_SIZE=64")
+EXP=$(make_export "lehd" "192" "12" "768" "phase1_lehd192" "400" "1" ",VNE_NUM_ENCODER_LAYERS=6,VNE_NUM_DECODER_LAYERS=6,VNE_BATCH_SIZE=16")
 JOB_L192=$(sbatch --parsable --partition=gpuISIN --exclude=gnode05 --gres=mps:30 --job-name=lehd192 --export="${EXP}" scripts/vne_train.sbatch)
 JOB_IDS["LEHD-192"]=$JOB_L192
 echo "  Job: $JOB_L192"
