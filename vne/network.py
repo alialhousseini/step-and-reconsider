@@ -294,29 +294,33 @@ class VNEPolicyNetwork(nn.Module):
         valid = mask.unsqueeze(-1).float()
         return (gathered * valid).sum(dim=2) / valid.sum(dim=2).clamp_min(1.0)
 
-    # Cap on (sub_batch_size * max_candidates) per batched pass. The decoder
-    # attention is O(sub_batch_size * max_candidates^2), so without a cap a single
-    # instance with hundreds of feasible paths would pad the whole batch up to its
-    # size and blow GPU memory. Sorting by candidate count + bounding this product
-    # keeps padding (and peak memory) small while preserving the batching speedup.
-    candidate_token_budget = 8000
+    # Sub-batching budget: cap on (sub_batch_size * max_decoder_tokens) per pass.
+    # Decoder tokens = 1 (context) + virtuals + candidates. At 60-80n:
+    # virtuals ~15 rq × 3.5 VNF = 52, candidates up to ~400 → total ~453.
+    # Budget=1200: worst-case 1200/453≈2 inst, typical 1200/103≈11 inst.
+    total_token_budget = 1200
 
     def forward(self, state_batch: List[Dict[str, torch.Tensor]]) -> List[torch.Tensor]:
         if not state_batch:
             return []
         results: List[torch.Tensor] = [None] * len(state_batch)  # type: ignore
-        order = sorted(
-            range(len(state_batch)),
-            key=lambda i: int(state_batch[i]["candidate_features"].shape[0]),
-        )
+        # Sort by total decoder token count (not just candidates) to keep sub-batches tight
+        def _decoder_tokens(idx: int) -> int:
+            s = state_batch[idx]
+            return (
+                1  # context
+                + int(s["virtual_features"].shape[0])
+                + int(s["candidate_features"].shape[0])
+            )
+        order = sorted(range(len(state_batch)), key=_decoder_tokens)
         i = 0
         while i < len(order):
             group: List[int] = []
             group_max = 0
             while i < len(order):
-                cand = max(1, int(state_batch[order[i]]["candidate_features"].shape[0]))
-                new_max = max(group_max, cand)
-                if group and (len(group) + 1) * new_max > self.candidate_token_budget:
+                tokens = max(1, _decoder_tokens(order[i]))
+                new_max = max(group_max, tokens)
+                if group and (len(group) + 1) * new_max > self.total_token_budget:
                     break
                 group.append(order[i])
                 group_max = new_max
