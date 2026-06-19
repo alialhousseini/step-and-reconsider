@@ -168,13 +168,14 @@ class BQPolicyNetwork(nn.Module):
         return [logits_all[i, : cand_counts[i]] for i in range(batch)]
 
     # ------------------------------------------------------------------
-    # Sub-batching (same budget logic as VNEPolicyNetwork)
+    # Sub-batching: cap on (sub_batch_size * total_seq_len) per forward pass.
+    # Budget scales inversely with embedding dim because attention memory ∝ dim².
+    # Reference: dim=128 → budget=1200, dim=192 → budget=800, dim=256 → budget=600.
     # ------------------------------------------------------------------
 
-    # Sub-batching budget: cap on (sub_batch_size * total_seq_len) per forward pass.
-    # At 60-80n scale each instance has ~70+70+52+cand ≈ 192+cand tokens.
-    # Budget=1200: worst-case 1200/(192+1)=6 inst, typical 1200/(192+50)=5 inst.
-    total_token_budget = 1200
+    @property
+    def total_token_budget(self) -> int:
+        return max(400, 1200 * 128 // self.config.embedding_dim)
 
     def forward(self, state_batch: List[Dict[str, torch.Tensor]]) -> List[torch.Tensor]:
         if not state_batch:

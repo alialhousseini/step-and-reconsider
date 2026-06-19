@@ -295,10 +295,12 @@ class VNEPolicyNetwork(nn.Module):
         return (gathered * valid).sum(dim=2) / valid.sum(dim=2).clamp_min(1.0)
 
     # Sub-batching budget: cap on (sub_batch_size * max_decoder_tokens) per pass.
-    # Decoder tokens = 1 (context) + virtuals + candidates. At 60-80n:
-    # virtuals ~15 rq × 3.5 VNF = 52, candidates up to ~400 → total ~453.
-    # Budget=1200: worst-case 1200/453≈2 inst, typical 1200/103≈11 inst.
-    total_token_budget = 1200
+    # Decoder tokens = 1 (context) + virtuals + candidates.
+    # Budget scales inversely with embedding dim (attention memory ∝ dim²).
+    # Reference: dim=128 → budget=1200, dim=192 → budget=800, dim=256 → budget=600.
+    @property
+    def total_token_budget(self) -> int:
+        return max(300, 1200 * 128 // self.config.embedding_dim)
 
     def forward(self, state_batch: List[Dict[str, torch.Tensor]]) -> List[torch.Tensor]:
         if not state_batch:
