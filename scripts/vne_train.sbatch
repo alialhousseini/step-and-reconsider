@@ -20,6 +20,10 @@ export PYTHONUNBUFFERED=1
 # Avoid fragmentation under memory-fraction caps — grow segments incrementally.
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
+# Pin to a specific GPU on multi-GPU nodes (set via VNE_GPU_DEVICE env var).
+# Must be set BEFORE PyTorch/CUDA init, so we export it as the real env var.
+export CUDA_VISIBLE_DEVICES="${VNE_GPU_DEVICE:-0}"
+
 REPO="${VNE_REPO:-/mnt/beegfs/scratch/ali.alhousseini/step-and-reconsider}"
 cd "$REPO"; mkdir -p logs
 
