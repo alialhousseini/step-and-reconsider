@@ -213,8 +213,14 @@ def main_train_cycle(
         if config.num_epochs == 0:
             print(f"Evaluating on test set {config.test_set_path} with loaded model.")
         else:
+            best_path = os.path.join(config.results_path, "best_model.pt")
+            if not os.path.exists(best_path):
+                # No best model saved (e.g. all first-epoch predictions infeasible
+                # so validation metric never improved from +inf).  Fall back to
+                # last_model.pt which is always written after every epoch.
+                best_path = os.path.join(config.results_path, "last_model.pt")
             print(f"Evaluating on test set {config.test_set_path} with best model.")
-            checkpoint = torch.load(os.path.join(config.results_path, "best_model.pt"))
+            checkpoint = torch.load(best_path)
             network.load_state_dict(checkpoint["model_weights"])
 
         if checkpoint["model_weights"] is None and config.num_epochs == 0:

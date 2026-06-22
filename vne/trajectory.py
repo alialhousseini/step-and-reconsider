@@ -127,7 +127,7 @@ class Trajectory(BaseTrajectory):
         link_idx: int,
         forced_start: int | None,
         first_only: bool = False,
-        check_future_completion: bool = True,
+        check_future_completion: bool = False,  # OFF: exponential recursion at 60-80n scale
     ) -> List[Path]:
         substrate = instance["substrate"]
         request = _requests(instance)[request_idx]

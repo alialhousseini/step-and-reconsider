@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from core.gumbeldore_dataset import GumbeldoreDataset
+import core.stochastic_beam_search as sbs
 from core.train import main_train_cycle
 from vne.config import VNEConfig
 from vne.dataset import RandomVNEDataset
@@ -141,6 +142,95 @@ def save_search_results_to_dataset(destination_path: str, problem_instances, res
     return float(np.mean([item["objective"] for item in dataset]))
 
 
+def _evaluate_sequential(
+    eval_type: str,
+    config: VNEConfig,
+    network: VNEPolicyNetwork,
+    to_evaluate_path: str,
+    num_instances: Optional[int] = None,
+    beam_width: int = 1,
+):
+    """Ray-free sequential evaluation (no GumbeldoreDataset, no Ray workers).
+
+    Used for supervised-training per-epoch validation where the only goal is
+    greedy (beam_width=1) evaluation on a small subset.  Eliminates Ray as a
+    failure mode under MPS co-location — multiple SLURM jobs sharing one GPU
+    each auto-start their own Ray cluster, and those clusters deadlock.
+    """
+    with open(to_evaluate_path, "rb") as f:
+        instances = pickle.load(f)
+    if num_instances is not None:
+        instances = instances[:num_instances]
+    total_inst = len(instances)
+
+    device = torch.device(config.training_device)
+    network.eval()
+
+    # --- Callbacks matching async_sbs_worker in gumbeldore_dataset.py ---
+    def _child_log_probability_fn(trajectories):
+        return VNETrajectory.log_probability_fn(
+            trajectories=trajectories, network=network, to_numpy=True
+        )
+
+    def _child_transition_fn(trajectory_action_pairs):
+        return [traj.transition_fn(action) for traj, action in trajectory_action_pairs]
+
+    # Small-batch processing: 4-8 instances per beam_search call so the
+    # network's batched forward is exercised without the Ray machinery.
+    eval_batch = 8 if total_inst >= 128 else 4
+    t0 = time.time()
+    objectives = []
+    ilp_objectives = []
+    feasible_count = 0
+
+    with torch.no_grad():
+        for start in tqdm(range(0, total_inst, eval_batch), desc=f"{eval_type} seq"):
+            batch_insts = instances[start: start + eval_batch]
+            roots = VNETrajectory.init_batch_from_instance_list(
+                instances=[copy.deepcopy(inst) for inst in batch_insts],
+                network=network, device=device,
+            )
+            beam_leaves_batch = sbs.stochastic_beam_search(
+                child_log_probability_fn=_child_log_probability_fn,
+                child_transition_fn=_child_transition_fn,
+                root_states=roots,
+                beam_width=beam_width,
+                deterministic=True,
+            )
+            for i, inst in enumerate(batch_insts):
+                best_state = beam_leaves_batch[i][0].state
+                obj = VNETrajectory.to_max_evaluation_fn(best_state)
+                objectives.append(obj)
+
+                ilp_obj = inst.get("objective")
+                if ilp_obj is not None:
+                    ilp_objectives.append(ilp_obj)
+                if obj > float("-inf"):
+                    feasible_count += 1
+
+    t_eval = time.time() - t0
+
+    objectives = np.array(objectives, dtype=float)
+    gaps_pct = []
+    for model_obj, ilp_obj in zip(objectives, ilp_objectives):
+        if model_obj > float("-inf") and ilp_obj != 0:
+            gaps_pct.append((ilp_obj - model_obj) / abs(ilp_obj) * 100.0)
+        elif model_obj > float("-inf"):
+            gaps_pct.append(0.0)
+
+    n = len(objectives)
+    label = f"{eval_type} beam width {beam_width}"
+    loggable = {
+        f"{label}. Obj.": float(objectives.mean()),
+        f"{label} gap%": float(np.mean(gaps_pct)) if gaps_pct else float("nan"),
+        f"{label} feas%": feasible_count / n * 100.0 if n else 0.0,
+        f"{label} time/inst_ms": (t_eval / max(total_inst, 1)) * 1000.0,
+    }
+    metric = -float(objectives.mean())  # to MINIMIZE (negative objective)
+
+    return metric, loggable
+
+
 def evaluate(eval_type: str, config: VNEConfig, network: VNEPolicyNetwork, to_evaluate_path: str, num_instances: Optional[int] = None):
     def load_instances(conf):
         with open(to_evaluate_path, "rb") as f:
@@ -222,10 +312,26 @@ def evaluate(eval_type: str, config: VNEConfig, network: VNEPolicyNetwork, to_ev
 
 
 def validate(config: VNEConfig, network: VNEPolicyNetwork):
+    # For supervised training, use Ray-free sequential evaluation so that
+    # MPS co-location (multiple jobs on one GPU) does not deadlock from
+    # conflicting Ray auto-initializations in GumbeldoreDataset.
+    if config.learning_type == "supervised":
+        return _evaluate_sequential(
+            "Validation", config, network,
+            config.validation_set_path, config.validation_custom_num_instances,
+            beam_width=config.validation_relevant_beam_width,
+        )
     return evaluate("Validation", config, network, config.validation_set_path, config.validation_custom_num_instances)
 
 
 def test(config: VNEConfig, network: VNEPolicyNetwork):
+    if config.learning_type == "supervised":
+        _, loggable = _evaluate_sequential(
+            "Test", config, network,
+            config.test_set_path, None,
+            beam_width=config.validation_relevant_beam_width,
+        )
+        return loggable
     _, loggable = evaluate("Test", config, network, config.test_set_path, None)
     return loggable
 

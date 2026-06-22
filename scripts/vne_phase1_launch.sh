@@ -60,11 +60,23 @@ echo "  Job: $JOB_BQ128"
 
 # ---- BQ-192 (9 blocks, dim=192, heads=12, ff=768, ~4.00M params) ----
 # GPU 1 on gnode06 L40S. Shares with LEHD-192.
+# FALLBACK: if gnode06 GPU 1 is occupied, use gpu_HIGH (A100 80GB).
 echo ">>> BQ-192 (seed=200, GPU 1)"
 EXP=$(make_export "bq" "192" "12" "768" "phase1_bq192" "200" "1" ",VNE_BATCH_SIZE=16")
 JOB_BQ192=$(sbatch --parsable --partition=gpuISIN --exclude=gnode05 --gres=mps:30 --job-name=bq192 --export="${EXP}" scripts/vne_train.sbatch)
 JOB_IDS["BQ-192"]=$JOB_BQ192
 echo "  Job: $JOB_BQ192"
+# If BQ-192 is pending after 10s (node full), retry on gpu_HIGH A100.
+sleep 10
+BQ192_STATE=$(squeue -j "$JOB_BQ192" -h -o "%T" 2>/dev/null || echo "UNKNOWN")
+if [[ "$BQ192_STATE" == "PENDING" ]]; then
+    echo "  BQ-192 pending on gpuISIN — retrying on gpu_HIGH (A100)."
+    scancel "$JOB_BQ192" 2>/dev/null || true
+    EXP2=$(make_export "bq" "192" "12" "768" "phase1_bq192" "200" "0" ",VNE_BATCH_SIZE=16" "0.40")
+    JOB_BQ192=$(sbatch --parsable --partition=gpu_HIGH --gres=mps:a100:50 --job-name=bq192 --export="${EXP2}" scripts/vne_train.sbatch)
+    JOB_IDS["BQ-192"]=$JOB_BQ192
+    echo "  Job (gpu_HIGH): $JOB_BQ192"
+fi
 
 # ---- LEHD-128 (6e+6d, dim=128, heads=8, ff=512, ~2.43M params) ----
 # GPU 0 on gnode06 L40S. Shares with BQ-128.
