@@ -128,6 +128,7 @@ class Trajectory(BaseTrajectory):
         forced_start: int | None,
         first_only: bool = False,
         check_future_completion: bool = False,  # OFF: exponential recursion at 60-80n scale
+        max_candidates: int = 500,  # cap DFS enumeration (60-80n graphs have thousands)
     ) -> List[Path]:
         substrate = instance["substrate"]
         request = _requests(instance)[request_idx]
@@ -157,7 +158,13 @@ class Trajectory(BaseTrajectory):
                         continue
                     if _comp_at(compute_attachment, residual_compute, nxt) >= dest_dem:
                         candidates.append(next_path)
+                        if len(candidates) >= max_candidates:
+                            break  # inner loop
                     stack.append((nxt, next_path))
+                if len(candidates) >= max_candidates:
+                    break  # stack loop
+            if len(candidates) >= max_candidates:
+                break  # start-node loop
         if not check_future_completion:
             return candidates[:1] if first_only else candidates
 

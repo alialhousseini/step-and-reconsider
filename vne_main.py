@@ -124,12 +124,53 @@ def beam_leaves_to_result(trajectories: List[VNETrajectory]):
     return result
 
 
+def _result_has_complete_paths(instance: dict, result: dict) -> bool:
+    """Verify every accepted request has a path for every link."""
+    paths = result.get("processing_paths", [])
+    requests = instance.get("requests", [instance.get("request")] if "request" in instance else [])
+    accepted = instance.get("accepted", [True] * len(requests))
+    if not paths:
+        return False
+    # Detect nested vs flat
+    nested = any(isinstance(p, list) and p and isinstance(p[0], (list, tuple)) for p in paths)
+    for req_idx, req in enumerate(requests):
+        if not accepted[req_idx]:
+            continue
+        chain_len = req["num_processing_nodes"] - 1
+        if nested:
+            if req_idx >= len(paths) or len(paths[req_idx]) < chain_len:
+                return False
+        else:
+            if req_idx > 0:
+                return False  # flat paths only support single-request
+            if len(paths) < chain_len:
+                return False
+    return True
+
+
 def save_search_results_to_dataset(destination_path: str, problem_instances, results, append_to_dataset):
     dataset = []
+    skipped_infeasible = 0
+    skipped_incomplete = 0
     for instance, result in zip(problem_instances, results):
+        if result.get("objective", float("-inf")) <= float("-inf"):
+            skipped_infeasible += 1
+            continue  # infeasible — don't add to training set
+        if not _result_has_complete_paths(instance, result):
+            skipped_incomplete += 1
+            continue  # partially assigned — can't be used as training target
         item = copy.deepcopy(instance)
         item.update(result)
         dataset.append(item)
+    if skipped_infeasible or skipped_incomplete:
+        print(f"  Skipped {skipped_infeasible} infeasible, {skipped_incomplete} incomplete / {len(results)} results.")
+
+    if not dataset:
+        raise RuntimeError(
+            "All generated instances were infeasible. "
+            "The search cannot find valid embeddings. "
+            "Try a larger beam_width or smaller problem instances."
+        )
 
     if append_to_dataset:
         with open(destination_path, "rb") as f:
@@ -312,27 +353,23 @@ def evaluate(eval_type: str, config: VNEConfig, network: VNEPolicyNetwork, to_ev
 
 
 def validate(config: VNEConfig, network: VNEPolicyNetwork):
-    # For supervised training, use Ray-free sequential evaluation so that
-    # MPS co-location (multiple jobs on one GPU) does not deadlock from
-    # conflicting Ray auto-initializations in GumbeldoreDataset.
-    if config.learning_type == "supervised":
-        return _evaluate_sequential(
-            "Validation", config, network,
-            config.validation_set_path, config.validation_custom_num_instances,
-            beam_width=config.validation_relevant_beam_width,
-        )
-    return evaluate("Validation", config, network, config.validation_set_path, config.validation_custom_num_instances)
+    # Always use Ray-free sequential evaluation.  Ray-based GumbeldoreDataset
+    # workers deadlock under MPS co-location, and the per-epoch validation only
+    # needs greedy (beam_width=1) on a small subset — a few minutes sequentially.
+    return _evaluate_sequential(
+        "Validation", config, network,
+        config.validation_set_path, config.validation_custom_num_instances,
+        beam_width=config.validation_relevant_beam_width,
+    )
 
 
 def test(config: VNEConfig, network: VNEPolicyNetwork):
-    if config.learning_type == "supervised":
-        _, loggable = _evaluate_sequential(
-            "Test", config, network,
-            config.test_set_path, None,
-            beam_width=config.validation_relevant_beam_width,
-        )
-        return loggable
-    _, loggable = evaluate("Test", config, network, config.test_set_path, None)
+    # Ray-free sequential — same rationale as validate().
+    _, loggable = _evaluate_sequential(
+        "Test", config, network,
+        config.test_set_path, None,
+        beam_width=config.validation_relevant_beam_width,
+    )
     return loggable
 
 
@@ -471,8 +508,13 @@ def _apply_env_overrides(config: VNEConfig) -> None:
         config.architecture = env["VNE_ARCHITECTURE"]
     if env.get("VNE_SEED"):
         config.seed = int(env["VNE_SEED"])
+    if env.get("VNE_LOAD_CHECKPOINT_FROM_PATH"):
+        config.load_checkpoint_from_path = env["VNE_LOAD_CHECKPOINT_FROM_PATH"]
+        config.reset_best_validation = True  # fresh start for new training paradigm
     if env.get("VNE_BEAM_WIDTH"):
         config.gumbeldore_config["beam_width"] = int(env["VNE_BEAM_WIDTH"])
+    if env.get("VNE_SEARCH_TYPE"):
+        config.gumbeldore_config["search_type"] = env["VNE_SEARCH_TYPE"]
     if env.get("VNE_REPLAN_STEPS"):
         config.gumbeldore_config["replan_steps"] = int(env["VNE_REPLAN_STEPS"])
     if env.get("VNE_NUM_GENERATE"):

@@ -60,9 +60,26 @@ def _chosen_path(instance: Dict, config: VNEConfig, request_idx: int, link_idx: 
     if "processing_paths" in instance:
         paths = instance["processing_paths"]
         if _has_nested_paths(paths):
-            return tuple(int(node) for node in paths[request_idx][link_idx])
+            # Defensive: a SIL-generated instance may have incomplete paths
+            # (e.g. beam search terminated with a partial assignment that
+            # still got a finite objective).  Treat missing entries as
+            # malformed — the caller should skip such instances.
+            try:
+                entry = paths[request_idx][link_idx]
+            except (IndexError, TypeError):
+                raise ValueError(
+                    f"Incomplete processing_paths: request {request_idx} link {link_idx} "
+                    f"not found in {paths}"
+                )
+            return tuple(int(node) for node in entry)
         if request_idx == 0:
-            return tuple(int(node) for node in paths[link_idx])
+            try:
+                return tuple(int(node) for node in paths[link_idx])
+            except (IndexError, TypeError):
+                raise ValueError(
+                    f"Incomplete processing_paths (flat): link {link_idx} "
+                    f"not found in {paths}"
+                )
     if "chosen_path" in instance and request_idx == 0 and link_idx == 0:
         start, end = tuple(int(node) for node in instance["chosen_path"])
         if config.substrate_topology == "line":
@@ -163,16 +180,40 @@ class RandomVNEDataset(Dataset):
             self.instances = self.instances[:custom_num_instances]
 
         self.decision_index = []
+        skipped_instances = 0
         for instance_idx, instance in enumerate(self.instances):
             requests = _requests(instance)
             _validate_instance_size(instance, config)
             accepted = _accepted_for(instance, requests)
+
+            # Verify every accepted request has complete processing_paths before
+            # indexing — SIL-generated datasets can contain partially-assigned
+            # instances that pass the objective filter but lack all paths.
+            paths_ok = True
+            for request_idx, request in enumerate(requests):
+                if not accepted[request_idx]:
+                    continue
+                chain_length = request["num_processing_nodes"] - 1
+                for link_idx in range(chain_length):
+                    try:
+                        _chosen_path(instance, config, request_idx, link_idx)
+                    except (ValueError, IndexError):
+                        paths_ok = False
+                        break
+                if not paths_ok:
+                    break
+            if not paths_ok:
+                skipped_instances += 1
+                continue
+
             for request_idx, request in enumerate(requests):
                 # Rejected requests have no embedding to replay as a target.
                 if not accepted[request_idx]:
                     continue
                 for link_idx in range(request["num_processing_nodes"] - 1):
                     self.decision_index.append((instance_idx, request_idx, link_idx))
+        if skipped_instances:
+            print(f"  Skipped {skipped_instances}/{len(self.instances)} instances with incomplete paths.")
         if not self.decision_index:
             raise ValueError("VNE dataset has no replay decisions.")
 
