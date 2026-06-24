@@ -267,7 +267,14 @@ def _evaluate_sequential(
         f"{label} feas%": feasible_count / n * 100.0 if n else 0.0,
         f"{label} time/inst_ms": (t_eval / max(total_inst, 1)) * 1000.0,
     }
-    metric = -float(objectives.mean())  # to MINIMIZE (negative objective)
+    # Best-model selection metric (LOWER is better), lexicographic to match
+    # config.validation_objective="lex": feasibility first, then mean gap over
+    # feasible instances. The mean objective alone is unusable for selection —
+    # a single infeasible instance makes it -inf every epoch, so the previous
+    # `-objectives.mean()` was always +inf and no best_model.pt was ever saved.
+    feas_frac = feasible_count / n if n else 0.0
+    mean_gap = float(np.mean(gaps_pct)) if gaps_pct else 1000.0
+    metric = (1.0 - feas_frac) * 1000.0 + mean_gap
 
     return metric, loggable
 
