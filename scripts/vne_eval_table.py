@@ -115,14 +115,22 @@ def main():
         instances = pickle.load(f)[:n_inst]
     N = len(instances)
 
-    plan = [
-        ("greedy",        "bs",    1,  None),
-        ("bs k=8",        "bs",    8,  None),
-        ("bs k=16",       "bs",    16, None),
-        ("TaSaR k=8 s=2", "tasar", 8,  2),
-        ("TaSaR k=8 s=4", "tasar", 8,  4),
-        ("TaSaR k=16 s=4","tasar", 16, 4),
-    ]
+    # EVAL_PLAN env: comma-separated configs, e.g. "greedy,bs:16,tasar:8:4,tasar:16:4".
+    # Default = full set.
+    def parse_plan(spec):
+        out = []
+        for tok in spec.split(","):
+            tok = tok.strip()
+            if tok == "greedy":
+                out.append(("greedy", "bs", 1, None))
+            elif tok.startswith("bs:"):
+                k = int(tok.split(":")[1]); out.append((f"bs k={k}", "bs", k, None))
+            elif tok.startswith("tasar:"):
+                _, k, s = tok.split(":"); out.append((f"TaSaR k={k} s={s}", "tasar", int(k), int(s)))
+        return out
+
+    default_plan = "greedy,bs:8,bs:16,tasar:8:2,tasar:8:4,tasar:16:4"
+    plan = parse_plan(os.environ.get("EVAL_PLAN", default_plan))
 
     results = {}
     for name, mode, k, s in plan:
@@ -162,7 +170,7 @@ def main():
     # markdown table; bold feasibility-first, gap on F*
     print(f"\n\n=== VNE Phase 2 results: group {label} ===")
     print(f"ckpt={ckpt}  N={N}  |F*|={len(fstar)}  top_p={top_p}")
-    print("\n| Method | Feas%* | Gap%(F*)† | ⟨g(k,s)⟩‡ | Time set(s)§ | ms/inst |")
+    print("\n| Method | Feas% | Gap%(F*) | g(k,s) | Time set(s) | ms/inst |")
     print("|---|---|---|---|---|---|")
     best_feas = max(r["feas_pct"] for r in rows)
     best_gap = min((r["gap_Fstar_pct"] for r in rows if r["gap_Fstar_pct"] == r["gap_Fstar_pct"]), default=None)
