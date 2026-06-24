@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
+import numpy as np
 import torch
 
 Path = Tuple[int, ...]
@@ -221,13 +222,19 @@ def _build_candidate_features(
     rows = []
     for path in candidates:
         start, end = path[0], path[-1]
-        edges = path_edges(path)
-        path_bw = min(residual_bandwidth[edge] for edge in edges)
+        # single pass over consecutive node pairs: min residual bandwidth +
+        # edge count, without building an intermediate edges list per candidate.
+        num_edges = len(path) - 1
+        path_bw = residual_bandwidth[(path[0], path[1])]
+        for i in range(1, num_edges):
+            bw = residual_bandwidth[(path[i], path[i + 1])]
+            if bw < path_bw:
+                path_bw = bw
         rows.append(
             [
                 float(start) / norm["node_id"],
                 float(end) / norm["node_id"],
-                float(len(edges)) / _safe_denominator(instance["substrate"]["num_comm_nodes"] - 1),
+                float(num_edges) / _safe_denominator(instance["substrate"]["num_comm_nodes"] - 1),
                 float(path_bw) / norm["bandwidth"],
                 float(comp_at(compute_attachment, residual_compute, start)) / norm["compute"],
                 float(comp_at(compute_attachment, residual_compute, end)) / norm["compute"],
@@ -251,20 +258,31 @@ def _build_candidate_indices(
     }
     max_path_nodes = max((len(path) for path in candidates), default=1)
     max_path_edges = max((len(path) - 1 for path in candidates), default=1)
-    node_indices = torch.zeros((len(candidates), max_path_nodes), dtype=torch.long)
-    node_mask = torch.zeros((len(candidates), max_path_nodes), dtype=torch.bool)
-    edge_indices = torch.zeros((len(candidates), max_path_edges), dtype=torch.long)
-    edge_mask = torch.zeros((len(candidates), max_path_edges), dtype=torch.bool)
+    # Fill NumPy buffers in fast Python loops, then convert to tensors ONCE.
+    # The previous per-element tensor __setitem__ dominated generation time
+    # (~64% of profile); this is byte-identical output, just vectorised.
+    node_indices = np.zeros((len(candidates), max_path_nodes), dtype=np.int64)
+    node_mask = np.zeros((len(candidates), max_path_nodes), dtype=bool)
+    edge_indices = np.zeros((len(candidates), max_path_edges), dtype=np.int64)
+    edge_mask = np.zeros((len(candidates), max_path_edges), dtype=bool)
 
     for candidate_idx, path in enumerate(candidates):
-        for pos, node in enumerate(path):
-            node_indices[candidate_idx, pos] = int(node)
-            node_mask[candidate_idx, pos] = True
-        for pos, edge in enumerate(path_edges(path)):
-            edge_indices[candidate_idx, pos] = edge_to_idx[edge]
-            edge_mask[candidate_idx, pos] = True
+        num_nodes = len(path)
+        node_indices[candidate_idx, :num_nodes] = path
+        node_mask[candidate_idx, :num_nodes] = True
+        num_edges = num_nodes - 1
+        if num_edges > 0:
+            edge_indices[candidate_idx, :num_edges] = [
+                edge_to_idx[edge] for edge in path_edges(path)
+            ]
+            edge_mask[candidate_idx, :num_edges] = True
 
-    return node_indices, node_mask, edge_indices, edge_mask
+    return (
+        torch.from_numpy(node_indices),
+        torch.from_numpy(node_mask),
+        torch.from_numpy(edge_indices),
+        torch.from_numpy(edge_mask),
+    )
 
 
 def build_vne_state_input(

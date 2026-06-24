@@ -107,8 +107,10 @@ class Trajectory(BaseTrajectory):
         request = _requests(instance)[request_idx]
         chain_length = request["num_processing_nodes"] - 1
         proc_dem = request["processing_link_demands"][link_idx]
-        new_bandwidth = copy.deepcopy(residual_bandwidth)
-        new_compute = copy.deepcopy(residual_compute)
+        # Shallow dict copies: keys are immutable tuples/ints, values are ints,
+        # so this is semantically identical to deepcopy but ~orders faster.
+        new_bandwidth = dict(residual_bandwidth)
+        new_compute = dict(residual_compute)
         if link_idx == 0:
             new_compute[compute_attachment[path[0]]] -= request["source_link_demand"]
         if link_idx == chain_length - 1:
@@ -224,38 +226,52 @@ class Trajectory(BaseTrajectory):
         return output
 
     def transition_fn(self, action_index: int):
-        new_trajectory = copy.deepcopy(self)
-        chosen_path = new_trajectory.action_candidates[action_index]
-        request_idx = new_trajectory.current_request_idx
-        request = _requests(new_trajectory.instance)[request_idx]
-        link_idx = new_trajectory.current_link_idx
+        # FIX A: build the child explicitly instead of copy.deepcopy(self).
+        # `instance` and `compute_attachment` are read-only during a rollout and
+        # are shared by reference; only the mutable residual dicts and the small
+        # accumulator lists are copied (shallowly — their elements are immutable).
+        chosen_path = self.action_candidates[action_index]
+        request_idx = self.current_request_idx
+        link_idx = self.current_link_idx
+        request = _requests(self.instance)[request_idx]
 
         proc_dem = request["processing_link_demands"][link_idx]
 
         start, end = chosen_path[0], chosen_path[-1]
-        attach = new_trajectory.compute_attachment
         new_bandwidth, new_compute = self._apply_path(
-            new_trajectory.instance,
-            new_trajectory.residual_bandwidth,
-            new_trajectory.residual_compute,
-            attach,
+            self.instance,
+            self.residual_bandwidth,
+            self.residual_compute,
+            self.compute_attachment,
             request_idx,
             link_idx,
             chosen_path,
         )
-        new_trajectory.residual_bandwidth = new_bandwidth
-        new_trajectory.residual_compute = new_compute
 
-        while len(new_trajectory.processing_paths) <= request_idx:
-            new_trajectory.processing_paths.append([])
-        while len(new_trajectory.f_placements) <= request_idx:
-            new_trajectory.f_placements.append([])
+        new_processing_paths = [list(paths) for paths in self.processing_paths]
+        new_f_placements = [list(nodes) for nodes in self.f_placements]
+        while len(new_processing_paths) <= request_idx:
+            new_processing_paths.append([])
+        while len(new_f_placements) <= request_idx:
+            new_f_placements.append([])
         if link_idx == 0:
-            new_trajectory.f_placements[request_idx].append(start)
-        new_trajectory.f_placements[request_idx].append(end)
-        new_trajectory.processing_paths[request_idx].append(chosen_path)
-        new_trajectory.chosen_path = (start, end)
-        new_trajectory.objective -= self.compute_cost(chosen_path, proc_dem)
+            new_f_placements[request_idx].append(start)
+        new_f_placements[request_idx].append(end)
+        new_processing_paths[request_idx].append(chosen_path)
+
+        new_trajectory = Trajectory(
+            instance=self.instance,
+            residual_bandwidth=new_bandwidth,
+            residual_compute=new_compute,
+            compute_attachment=self.compute_attachment,
+            action_candidates=[],
+            current_request_idx=request_idx,
+            current_link_idx=link_idx,
+            processing_paths=new_processing_paths,
+            f_placements=new_f_placements,
+            chosen_path=(start, end),
+            objective=self.objective - self.compute_cost(chosen_path, proc_dem),
+        )
 
         next_request_idx, next_link_idx = self._next_position(
             new_trajectory.instance,
