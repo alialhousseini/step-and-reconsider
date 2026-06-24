@@ -524,6 +524,10 @@ def _apply_env_overrides(config: VNEConfig) -> None:
         config.gumbeldore_config["search_type"] = env["VNE_SEARCH_TYPE"]
     if env.get("VNE_REPLAN_STEPS"):
         config.gumbeldore_config["replan_steps"] = int(env["VNE_REPLAN_STEPS"])
+    if env.get("VNE_MIN_TOP_P"):
+        # Constant Top-p nucleus threshold for TaSaR. 1.0 = no truncation
+        # (= WOR-SBS / Gumbeldore baseline); <1.0 = genuine TaSaR sampling.
+        config.gumbeldore_config["min_nucleus_top_p"] = float(env["VNE_MIN_TOP_P"])
     if env.get("VNE_NUM_GENERATE"):
         config.gumbeldore_config["num_instances_to_generate"] = int(env["VNE_NUM_GENERATE"])
     if env.get("VNE_NUM_CPU_WORKERS"):
