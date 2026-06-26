@@ -7,18 +7,19 @@ emits the markdown table + caption.
 
 Rows are defined below in ROW_PLAN as (display_label, json_path, config_key).
 """
-import sys, json
+import sys, os, json
 import numpy as np
 
 # Edit/extend as needed; config_key must match a key in that JSON's per_instance.
 SCR = sys.argv[1] if len(sys.argv) > 1 else "."
+G = os.environ.get("EVAL_GROUP", "BQ")  # architecture group label (BQ / LEHD)
 ROW_PLAN = [
-    ("BQ SL, greedy",         f"{SCR}/eval_sl.json",    "greedy"),
-    ("GD SIL (BQ), greedy",   f"{SCR}/eval_gdsil.json", "greedy"),
-    ("Ours (BQ), greedy",     f"{SCR}/eval_tasar.json", "greedy"),
-    ("Ours (BQ), bs k=16",    f"{SCR}/eval_tasar.json", "bs k=16"),
-    ("Ours (BQ), k=8 s=4",    f"{SCR}/eval_tasar.json", "TaSaR k=8 s=4"),
-    ("Ours (BQ), k=16 s=4",   f"{SCR}/eval_tasar.json", "TaSaR k=16 s=4"),
+    (f"{G} SL, greedy",        f"{SCR}/eval_sl.json",    "greedy"),
+    (f"GD SIL ({G}), greedy",  f"{SCR}/eval_gdsil.json", "greedy"),
+    (f"Ours ({G}), greedy",    f"{SCR}/eval_tasar.json", "greedy"),
+    (f"Ours ({G}), bs k=16",   f"{SCR}/eval_tasar.json", "bs k=16"),
+    (f"Ours ({G}), k=8 s=4",   f"{SCR}/eval_tasar.json", "TaSaR k=8 s=4"),
+    (f"Ours ({G}), k=16 s=4",  f"{SCR}/eval_tasar.json", "TaSaR k=16 s=4"),
 ]
 
 
@@ -67,7 +68,7 @@ def main():
     valid_gaps = [r["gap_Fstar"] for r in out_rows if r["gap_Fstar"] == r["gap_Fstar"]]
     best_gap = min(valid_gaps) if valid_gaps else None
 
-    print(f"\n=== VNE PHASE 2 RESULTS TABLE (BQ) ===  N={N}  |F*|={len(fstar)}\n")
+    print(f"\n=== VNE PHASE 2 RESULTS TABLE ({G}) ===  N={N}  |F*|={len(fstar)}\n")
     print("| Method | Feas% | Gap%(F*) | g(k,s) | Time set(s) | ms/inst |")
     print("|---|---|---|---|---|---|")
     for r in out_rows:

@@ -40,6 +40,30 @@ the weak `BQ SL greedy` (27.7% feas) shrinks F* to an easy subset; treat Feas% (
 robust metric and Gap%(F*) as conservative. A gap over the stronger-rows-only F* gives a fuller
 picture (see auxiliary).
 
+## Results table (LEHD group) — N=256, |F*|=26, Top-p=0.9
+
+Checkpoints: SL = `phase1_lehd128_42487/last_model.pt`; GD SIL = `2026-06-26--01-03-18/best_model.pt`
+(Top-p=1.0); Ours = `2026-06-26--03-37-43/best_model.pt` (Top-p=0.9). 6 enc / 6 dec layers.
+
+| Method                | Feas%* | Gap%(F*)† | ⟨g(k,s)⟩‡ | Time set(s)§ | ms/inst |
+|-----------------------|--------|-----------|-----------|--------------|---------|
+| LEHD SL, greedy       | 58.2   | 3.057     | 37        | 42           | 163     |
+| GD SIL (LEHD), greedy | 18.4✗  | 0.885     | 37        | 29           | 112     |
+| Ours (LEHD), greedy   | 55.5   | 4.400     | 37        | 40           | 158     |
+| Ours (LEHD), bs k=16  | 96.9   | 0.782     | 594       | 518          | 2024    |
+| Ours (LEHD), k=8 s=4  | 98.4   | 0.576     | 1613      | 664          | 2595    |
+| **Ours (LEHD), k=16 s=4** | **99.6** | **0.445** | 3226 | 1105         | 4317    |
+
+`✗` **The GD SIL (LEHD) run DIVERGED.** With Top-p=1.0 (un-truncated WOR-SBS) the LEHD SIL
+training collapsed from the seed's 58% feas to 5–19% across *all* 10 epochs (gradient clipping
+was on at 1.0). BQ+p=1.0 and LEHD+p=0.9 were both stable, so this is an instability specific to
+LEHD + un-truncated sampling — evidence that TaSaR's Top-p truncation aids training stability.
+Treat this row as a failed baseline, not a fair comparison.
+
+**Ours (LEHD) inference scaling** (on the robust Ours-only F*=142, excluding the diverged
+baseline): gap 3.78% (greedy) → 1.33 → 0.58 → **0.32%** (k=16,s=4); feas 55.5% → **99.6%**.
+Same monotonic compute-quality scaling as BQ.
+
 ## Caption / methodology (the documented deviations from the paper)
 
 - `*` **Feas%** = fraction of the full test set fully embedded. No analogue in TaSaR Table 1
