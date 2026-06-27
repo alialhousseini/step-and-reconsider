@@ -1,9 +1,12 @@
-# Self-Improved Neural Virtual Network Embedding with TaSaR
+# Self-Improved Neural Cloud Network Flow with TaSaR
 
 This repository applies **TaSaR** (*Take a Step and Reconsider*, ECAI-2024,
 [10.3233/FAIA240707](https://ebooks.iospress.nl/doi/10.3233/FAIA240707)) — a sequence-decoding
-method for self-improved neural combinatorial optimization — to a **new problem class:
-Virtual Network Embedding (VNE)**.
+method for self-improved neural combinatorial optimization — to a **new problem class: the
+Cloud Network Flow problem** (the *Cloud Service Distribution Problem*) of Llorca, Tulino et al.
+
+> The code package is named `vne/` for historical reasons, but the problem it solves is the
+> **Cloud Network Flow** problem described below — not generic Virtual Network Embedding.
 
 It is a fork of [gumbeldore](https://github.com/grimmlab/gumbeldore) (the codebase the TaSaR
 paper builds on). The original TSP / CVRP / JSSP / Gomoku scaffolding is preserved; the
@@ -16,17 +19,18 @@ generation → supervised baselines → self-improving learning → inference sc
 
 ## TL;DR — what we built and found
 
-- A complete **VNE problem implementation** for the TaSaR/gumbeldore framework: ILP-labelled
-  instance generation (HiGHS **and Gurobi**), an LEHD-style and a BQ-style policy network, the
-  VNE MDP/trajectory, dataset/replay, and the `vne_main.py` training entrypoint.
-- **Self-Improving Learning (SIL) with TaSaR works for VNE.** Seeded from a supervised model and
+- A complete **Cloud Network Flow implementation** for the TaSaR/gumbeldore framework:
+  ILP-labelled instance generation (HiGHS **and Gurobi**), an LEHD-style and a BQ-style policy
+  network, the service-chain placement-and-routing MDP/trajectory, dataset/replay, and the
+  `vne_main.py` training entrypoint.
+- **Self-Improving Learning (SIL) with TaSaR works for Cloud Network Flow.** Seeded from a supervised model and
   trained on its own TaSaR-decoded solutions, the policy reaches **100 % feasibility and ~0 %
   optimality gap** at high inference budget on the in-distribution test set — solving it.
 - **Search is what carries quality and generalization.** More beam width / TaSaR budget
   monotonically improves feasibility and gap; greedy alone is weak. Models trained on 60–80-node
   substrates stay **~87 % feasible out to 2.3× and ~50 % at 4.6×** larger substrates, **with no
   retraining**.
-- A **behaviour-preserving 8.6× speedup** of VNE TaSaR data generation (56 s → 6.5 s per
+- A **behaviour-preserving 8.6× speedup** of TaSaR data generation (56 s → 6.5 s per
   70-node instance) made the whole program tractable on a single GPU.
 
 Full numbers and methodology: [`docs/PHASE2_RESULTS.md`](docs/PHASE2_RESULTS.md),
@@ -34,23 +38,38 @@ Full numbers and methodology: [`docs/PHASE2_RESULTS.md`](docs/PHASE2_RESULTS.md)
 
 ---
 
-## The VNE problem (extended formulation)
+## The Cloud Network Flow problem
 
-Given a **substrate network** (communication nodes connected by bandwidth-carrying links, each
-optionally attached to a compute node) and a set of **virtual requests** (chains of virtual nodes
-with compute demands, connected by virtual links with bandwidth demands), **embed every request**:
-map each virtual node to a substrate node and route each virtual link along a substrate path,
-**without exceeding any node's compute or any link's bandwidth capacity**, minimising total
-embedding cost.
+We tackle the **Cloud Network Flow** problem — the *Cloud Service Distribution Problem (CSDP)* of
+Jaime Llorca, Antonia M. Tulino and collaborators. It models **service delivery over a
+distributed cloud network** whose nodes are equipped with **both communication and computation
+resources** (an edge/fog/cloud substrate), interconnected by capacitated transport links.
 
-To make the problem a clean **sequence-decoding** task, we use the *extended VNE* formulation
-(resources defined at the link level; one decision = pick a feasible substrate path for the next
-virtual link). The objective is **lexicographic: feasibility first, then cost.** Instance optima
-are obtained by solving an exact ILP. See [`vne/PROBLEM_FORMULATION.md`](vne/PROBLEM_FORMULATION.md)
-for the formal definition.
+- **Cloud network.** A directed graph of nodes carrying **transport** (link bandwidth) and
+  **compute** (node processing) capacity. In our augmented encoding, communication nodes are
+  optionally attached to a co-located computation node, and all capacities live at the **link
+  level** (communication links carry bandwidth; computation links carry processing capacity).
+- **Services as service-function chains.** Each request is a **chain of virtual functions** that a
+  flow must traverse in order: it enters at a source, is **processed** at successive functions
+  hosted on compute nodes, and is delivered to its destination. Consecutive functions are
+  connected by **flow demands** (bandwidth) along the chain, with compute demands at the chain
+  endpoints.
+- **Cloud network flow.** A generalized multi-commodity flow that is both **transported** over
+  communication links and **processed** at compute nodes (function execution / flow chaining),
+  subject to **generalized flow conservation** (output of one stage feeds the next) and to link-
+  bandwidth and node-compute capacities.
+- **Objective.** Minimise total cost = **communication (transport) cost + computation cost** —
+  the classic minimum-cost cloud-network-flow objective, solvable exactly as an **ILP** with
+  linear constraints (HiGHS / Gurobi here). For training we use a **lexicographic** objective:
+  *feasibility first* (embed all requests within capacity), *then cost*.
 
-**Default scale:** 60–80 substrate communication nodes, 10–20 virtual requests/instance, 2–5
-virtual nodes/request.
+To make this a clean **sequence-decoding** task for TaSaR, one decision = **pick a feasible
+substrate path for the next inter-function flow** of the current service chain; a full trajectory
+places and routes every chain. See [`vne/PROBLEM_FORMULATION.md`](vne/PROBLEM_FORMULATION.md) for
+the formal definition and the link-level encoding.
+
+**Default scale:** 60–80 communication nodes, 10–20 service requests/instance, 2–5 functions per
+chain.
 
 ---
 
@@ -82,7 +101,7 @@ The TaSaR decoder lives in `core/incremental_sbs.py::IncrementalSBS.perform_tasa
 | **4** | Generalization (no retraining) | gap to 1.35×; **feasibility ~87 % to 2.3×, ~50 % at 4.6×** | [PHASE4](docs/PHASE4_RESULTS.md) |
 
 Reporting is aligned with the TaSaR paper's Table 1 (per-architecture `SL → GD SIL → Ours`
-rows; node-transition compute budget `g(k,s)`), with VNE-specific extensions documented inline:
+rows; node-transition compute budget `g(k,s)`), with problem-specific extensions documented inline:
 **feasibility%** (the paper's domains are always feasible) and **gaps averaged over F\*** (the
 set of instances feasible under every compared method, so they are orderable).
 
@@ -96,7 +115,7 @@ Figures: `artifacts/vne_phase2_sil_curve.png`, `artifacts/vne_phase3_beam_scalin
 ```
 vne/
   config.py                    VNEConfig — all hyperparameters, paths, scale ranges
-  trajectory.py                VNE MDP: state, transitions, candidate-path enumeration, cost
+  trajectory.py                cloud-network-flow MDP: state, transitions, candidate-path enum, cost
   features.py                  build_vne_state_input — tensors from MDP state
   bq_network.py / network.py   BQ (unified) and LEHD (encoder/decoder) policy networks
   dataset.py                   RandomVNEDataset — loads pickles, indexes decisions
@@ -107,7 +126,7 @@ core/
   incremental_sbs.py           perform_tasar — the TaSaR decoder
   gumbeldore_dataset.py        Ray-parallel data generation
   train.py                     main_train_cycle — shared supervised / SIL loop
-vne_main.py                    VNE entrypoint (training, validation, test, env overrides)
+vne_main.py                    Cloud Network Flow entrypoint (training, validation, test, env overrides)
 scripts/
   vne_gen_parallel.py          parallel ILP-labelled generation (Gurobi, multiprocessing)
   vne_gen_unlabeled.py         no-solver instance generation (for feasibility tests)
@@ -219,5 +238,26 @@ This project builds directly on:
 }
 ```
 
-TaSaR and the gumbeldore framework are by the original authors; the VNE problem package and the
-experimental program in this repository are the new contribution.
+and on the **Cloud Network Flow** / Cloud Service Distribution problem of Llorca, Tulino et al.:
+
+```bibtex
+@article{feng2018optimal,
+  title   = {Optimal Dynamic Cloud Network Control},
+  author  = {Feng, Hao and Llorca, Jaime and Tulino, Antonia M. and Molisch, Andreas F.},
+  journal = {IEEE/ACM Transactions on Networking},
+  year    = {2018},
+  note    = {arXiv:1708.09561}
+}
+
+@inproceedings{barcelo2016cloud,
+  title     = {The Cloud Service Distribution Problem in Distributed Cloud Networks},
+  author    = {Barcel{\'o}, Marc and Llorca, Jaime and Tulino, Antonia M. and others},
+  booktitle = {IEEE International Conference on Communications (ICC)},
+  year      = {2015}
+}
+```
+
+TaSaR and the gumbeldore framework are by their original authors, and the Cloud Network Flow
+problem model is due to Llorca, Tulino et al. The contribution of *this* repository is the neural
+**sequence-decoding formulation of Cloud Network Flow** (the `vne/` package) and the
+self-improving-learning experimental program built on it.
