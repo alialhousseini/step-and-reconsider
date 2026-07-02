@@ -15,6 +15,8 @@ SCR = sys.argv[1] if len(sys.argv) > 1 else "."
 G = os.environ.get("EVAL_GROUP", "BQ")  # architecture group label (BQ / LEHD)
 ROW_PLAN = [
     (f"{G} SL, greedy",        f"{SCR}/eval_sl.json",    "greedy"),
+    (f"{G} SL, bs k=8",        f"{SCR}/eval_sl.json",    "bs k=8"),
+    (f"{G} SL, bs k=16",       f"{SCR}/eval_sl.json",    "bs k=16"),
     (f"GD SIL ({G}), greedy",  f"{SCR}/eval_gdsil.json", "greedy"),
     (f"Ours ({G}), greedy",    f"{SCR}/eval_tasar.json", "greedy"),
     (f"Ours ({G}), bs k=16",   f"{SCR}/eval_tasar.json", "bs k=16"),
