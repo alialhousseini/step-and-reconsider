@@ -19,6 +19,7 @@ ROW_PLAN = [
     (f"{G} SL, bs k=16",       f"{SCR}/eval_sl.json",    "bs k=16"),
     (f"GD SIL ({G}), greedy",  f"{SCR}/eval_gdsil.json", "greedy"),
     (f"Ours ({G}), greedy",    f"{SCR}/eval_tasar.json", "greedy"),
+    (f"Ours ({G}), bs k=8",    f"{SCR}/eval_tasar.json", "bs k=8"),
     (f"Ours ({G}), bs k=16",   f"{SCR}/eval_tasar.json", "bs k=16"),
     (f"Ours ({G}), k=8 s=4",   f"{SCR}/eval_tasar.json", "TaSaR k=8 s=4"),
     (f"Ours ({G}), k=16 s=4",  f"{SCR}/eval_tasar.json", "TaSaR k=16 s=4"),
