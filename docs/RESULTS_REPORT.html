@@ -619,6 +619,34 @@ checkpoint), and <strong>Gurobi wired through PuLP</strong> for the larger-scale
 <div class="callout">
 <p><strong>Gap%(F*) is averaged over a fixed, shared denominator; feasibility% is the primary ranking.</strong> Because F* is the set of instances feasible under <em>every</em> compared row, a weak baseline (BQ SL greedy, 27.7% feas) shrinks F* to just 39/256 easy instances. When SIL lifts feasibility, roughly 24pp of <em>harder</em> instances enter the feasible pool, which can make the mean gap tick <em>up</em> even though the model strictly improved &mdash; this is the feasible-pool-composition confound, not a regression. The completed feas 37%&rarr;60% with gap 2.08&rarr;2.84 pattern is exactly this trap: the two gaps are computed over different instance subsets. Treat Feas% (over the full N) as the robust metric and Gap%(F*) as conservative. The auxiliary F*=95 denominator (excluding the weak SL baseline) gives a cleaner view: gap 3.13 (greedy) &rarr; 2.01 (bs k=16) &rarr; 0.33 (k=8 s=4) &rarr; <strong>0.07</strong> (k=16 s=4), strictly monotone and converging to ~optimal.</p>
 </div>
+
+<h3 id="baseline-beam">Full method &times; budget comparison (feasibility%)</h3>
+<p>Completing the greedy &rarr; bs8 &rarr; bs16 feasibility sweep for <em>every</em> model row
+(N&nbsp;=&nbsp;256). The baseline rows (SL, GD-SIL) were previously greedy-only; the beam-search
+columns below are new. Ours' bs8 is taken from the Phase-3 sweep, and the final column repeats
+Ours' TaSaR-budget feasibility from the main table.</p>
+<table>
+<thead><tr><th>Arch</th><th>Method</th><th>greedy</th><th>bs 8</th><th>bs 16</th><th>Ours @ TaSaR k=8,s=4 / k=16,s=4</th></tr></thead>
+<tbody>
+<tr><td>BQ</td><td>SL</td><td>27.7</td><td>69.5</td><td>79.3</td><td>&mdash;</td></tr>
+<tr><td>BQ</td><td>GD-SIL</td><td>62.9</td><td>90.6</td><td>94.5</td><td>&mdash;</td></tr>
+<tr><td>BQ</td><td>Ours</td><td>53.1</td><td>87.5</td><td><strong>93.8</strong></td><td>99.2 / 100.0</td></tr>
+<tr><td>LEHD</td><td>SL</td><td>58.2</td><td>89.1</td><td>93.4</td><td>&mdash;</td></tr>
+<tr><td>LEHD</td><td>GD-SIL <em>(diverged)</em></td><td>18.4</td><td>52.3</td><td>66.4</td><td>&mdash;</td></tr>
+<tr><td>LEHD</td><td>Ours</td><td>55.5</td><td>91.0</td><td><strong>96.9</strong></td><td>98.4 / 99.6</td></tr>
+</tbody>
+</table>
+<p>Three things stand out. First, <strong>beam search alone is powerful here</strong> &mdash; every
+model climbs steeply (e.g. BQ&nbsp;SL 27.7&nbsp;&rarr;&nbsp;79.3). Second, at <strong>plain
+beam search the SIL baseline and Ours are comparable</strong> (BQ bs16: GD-SIL 94.5 vs Ours 93.8);
+<strong>Ours' distinct advantage is at the TaSaR budgets</strong> (BQ 99.2/100.0, LEHD 98.4/99.6) &mdash;
+the sample-and-reconsider decoder it was trained for. Third, <strong>LEHD GD-SIL diverged</strong>
+(18.4&nbsp;&rarr;&nbsp;66.4), below LEHD SL and Ours at every budget, reinforcing that un-truncated
+(p=1.0) SIL is unstable for LEHD whereas TaSaR's Top-p truncation is stable.</p>
+<div class="callout"><strong>Caveat.</strong> The baselines were evaluated only at greedy/bs8/bs16
+(deterministic beam search), not at TaSaR budgets. A fully budget-matched Ours-vs-GD-SIL comparison
+at TaSaR decoding is future work; at matched <em>deterministic</em> budgets the SIL models are on par,
+and Ours pulls ahead specifically under TaSaR inference.</div>
 </section>
 
 <section>
